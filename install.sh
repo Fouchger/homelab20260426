@@ -19,8 +19,8 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
-readonly REPO_NAME="${HOMELAB_REPO_NAME:-HomeLab20260426}"
-readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/HomeLab20260426}"
+readonly REPO_NAME="${HOMELAB_REPO_NAME:-HomeLab20260424}"
+readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/HomeLab20260424}"
 readonly GITHUB_BRANCH="${GITHUB_BRANCH:-${HOMELAB_BRANCH:-main}}"
 readonly GIT_PROTOCOL="${HOMELAB_GIT_PROTOCOL:-https}"
 readonly NONINTERACTIVE="${NONINTERACTIVE:-0}"
@@ -144,27 +144,23 @@ validate_setup() {
 }
 
 select_setup() {
-  if [ "${SETUP_SOURCE:-}" = "prompt" ]; then
-    return 0
-  fi
+  local selected_setup
 
-  if [ -n "${SETUP:-}" ]; then
+  if [ "$NONINTERACTIVE" = "1" ]; then
+    SETUP="${SETUP:-prod}"
     validate_setup
     return 0
   fi
 
-  if [ "$NONINTERACTIVE" = "1" ]; then
-    SETUP="prod"
-    return 0
-  fi
-
   while :; do
-    printf 'Select SETUP environment [prod/dev] (default: prod): ' > /dev/tty
-    IFS= read -r SETUP < /dev/tty
-    SETUP="${SETUP:-prod}"
-    case "$SETUP" in
-      prod|dev) return 0 ;;
-      *) printf 'Please enter prod or dev.\n' > /dev/tty ;;
+    printf '\nSelect SETUP environment:\n  1) prod\n  2) dev\nEnvironment [1/2/prod/dev] (default: prod): ' > /dev/tty
+    IFS= read -r selected_setup < /dev/tty
+    selected_setup="${selected_setup:-prod}"
+
+    case "$selected_setup" in
+      1|prod) SETUP="prod"; return 0 ;;
+      2|dev) SETUP="dev"; return 0 ;;
+      *) printf 'Please enter 1, 2, prod, or dev.\n' > /dev/tty ;;
     esac
   done
 }
@@ -402,7 +398,7 @@ install_task() {
 
 main() {
   echo '=========================================================='
-  echo '            HomeLab installer'
+  echo '            HomeLab20260424 installer'
   echo '=========================================================='
 
   select_setup
