@@ -2,27 +2,34 @@
 # ==============================================================================
 # File: install.sh
 # Purpose:
-#   Bootstrap installer for HomeLab20260424.
+#   Bootstrap installer for the HomeLab20260424 project.
+#
 # Notes:
-#   - Downloads or updates the repository, installs Task, and creates local state.
-#   - Operational work is intentionally delegated to Taskfile.yml after install.
 #   - Debian/Ubuntu oriented.
+#   - Downloads or updates the repository, installs Task, and creates only the
+#     local state required by this installer.
+#   - Operational work is intentionally delegated to Taskfile.yml after install.
+#   - SETUP is the target environment and must be either prod or dev.
 #   - Existing state/config/.env values are preserved and updated only by key.
-# ==============================================================================
+#   - Secrets are not created as plaintext by this installer. Encrypted secrets
+#     are managed later through the repository secrets workflow.
+# ============================================================================== 
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
-REPO_NAME="${HOMELAB_REPO_NAME:-HomeLab20260426}"
-GITHUB_REPO="${GITHUB_REPO:-Fouchger/HomeLab20260426}"
-GITHUB_BRANCH="${GITHUB_BRANCH:-${HOMELAB_BRANCH:-main}}"
-GIT_PROTOCOL="${HOMELAB_GIT_PROTOCOL:-https}"
-NONINTERACTIVE="${NONINTERACTIVE:-0}"
-SETUP="${SETUP:-}"
-TASK_INSTALL_REQUIRED="${TASK_INSTALL_REQUIRED:-1}"
+readonly REPO_NAME="${HOMELAB_REPO_NAME:-HomeLab20260426}"
+readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/HomeLab20260426}"
+readonly GITHUB_BRANCH="${GITHUB_BRANCH:-${HOMELAB_BRANCH:-main}}"
+readonly GIT_PROTOCOL="${HOMELAB_GIT_PROTOCOL:-https}"
+readonly NONINTERACTIVE="${NONINTERACTIVE:-0}"
+readonly TASK_INSTALL_REQUIRED="${TASK_INSTALL_REQUIRED:-1}"
+
+SETUP="${SETUP:-prod}"
 TARGET_DIR="${TARGET_DIR:-}"
 REPO_UPDATE_SKIPPED="0"
+APT_UPDATED="0"
 
 log_info() { printf 'INFO: %s\n' "$*"; }
 log_warn() { printf 'WARN: %s\n' "$*"; }
@@ -30,8 +37,8 @@ log_error() { printf 'ERROR: %s\n' "$*" >&2; }
 log_success() { printf 'SUCCESS: %s\n' "$*"; }
 
 on_error() {
-  exit_code="$1"
-  line_no="$2"
+  local exit_code="$1"
+  local line_no="$2"
   log_error "Install failed at line ${line_no} with exit code ${exit_code}."
   exit "$exit_code"
 }
@@ -39,6 +46,7 @@ trap 'on_error "$?" "$LINENO"' ERR
 
 is_debian_family() {
   [ -r /etc/os-release ] || return 1
+  # shellcheck disable=SC1091
   . /etc/os-release
   case "${ID:-} ${ID_LIKE:-}" in
     *debian*|*ubuntu*) return 0 ;;
@@ -60,21 +68,23 @@ as_root() {
   fi
 }
 
-apt_updated=0
 apt_update_once() {
-  if [ "$apt_updated" = "1" ]; then
+  if [ "$APT_UPDATED" = "1" ]; then
     return 0
   fi
+
   if [ "$NONINTERACTIVE" = "1" ]; then
     as_root env DEBIAN_FRONTEND=noninteractive apt-get update -y
   else
     as_root apt-get update -y
   fi
-  apt_updated=1
+
+  APT_UPDATED="1"
 }
 
 apt_install() {
   apt_update_once
+
   if [ "$NONINTERACTIVE" = "1" ]; then
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
   else
@@ -83,12 +93,25 @@ apt_install() {
 }
 
 ensure_command() {
-  command_name="$1"
-  package_name="$2"
+  local command_name="$1"
+  local package_name="$2"
+
   if command -v "$command_name" >/dev/null 2>&1; then
     return 0
   fi
+
   log_info "Installing missing command ${command_name} from package ${package_name}."
+  apt_install "$package_name"
+}
+
+ensure_package() {
+  local package_name="$1"
+
+  if dpkg-query -W -f='${Status}' "$package_name" 2>/dev/null | grep -Fq 'install ok installed'; then
+    return 0
+  fi
+
+  log_info "Installing missing package ${package_name}."
   apt_install "$package_name"
 }
 
@@ -97,9 +120,10 @@ ensure_prerequisites() {
     log_error 'Unsupported operating system. This installer supports Debian/Ubuntu.'
     exit 1
   fi
+
+  ensure_package ca-certificates
   ensure_command git git
   ensure_command curl curl
-  apt_install ca-certificates
 }
 
 validate_branch_name() {
@@ -109,12 +133,24 @@ validate_branch_name() {
   fi
 }
 
+validate_setup() {
+  case "$SETUP" in
+    prod|dev) return 0 ;;
+    *)
+      log_error 'SETUP must be prod or dev.'
+      exit 1
+      ;;
+  esac
+}
+
 select_setup() {
-  if [ -n "$SETUP" ]; then
-    case "$SETUP" in
-      prod|dev) return 0 ;;
-      *) log_error "SETUP must be prod or dev."; exit 1 ;;
-    esac
+  if [ "${SETUP_SOURCE:-}" = "prompt" ]; then
+    return 0
+  fi
+
+  if [ -n "${SETUP:-}" ]; then
+    validate_setup
+    return 0
   fi
 
   if [ "$NONINTERACTIVE" = "1" ]; then
@@ -138,10 +174,12 @@ resolve_target_dir() {
     mkdir -p "$(dirname "$TARGET_DIR")"
     return 0
   fi
+
   case "$SETUP" in
     prod) TARGET_DIR="${HOME}/app/${REPO_NAME}" ;;
     dev) TARGET_DIR="${HOME}/Github/${REPO_NAME}" ;;
   esac
+
   mkdir -p "$(dirname "$TARGET_DIR")"
 }
 
@@ -149,19 +187,26 @@ repo_url() {
   case "$GIT_PROTOCOL" in
     ssh) printf 'git@github.com:%s.git\n' "$GITHUB_REPO" ;;
     https) printf 'https://github.com/%s.git\n' "$GITHUB_REPO" ;;
-    *) log_warn "Unknown HOMELAB_GIT_PROTOCOL=${GIT_PROTOCOL}. Using https."; printf 'https://github.com/%s.git\n' "$GITHUB_REPO" ;;
+    *)
+      log_warn "Unknown HOMELAB_GIT_PROTOCOL=${GIT_PROTOCOL}. Using https."
+      printf 'https://github.com/%s.git\n' "$GITHUB_REPO"
+      ;;
   esac
 }
 
 gh_usable() {
   command -v gh >/dev/null 2>&1 || return 1
+
   if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then
     return 0
   fi
+
   gh auth status -h github.com >/dev/null 2>&1
 }
 
 clone_repo() {
+  local url
+
   if gh_usable; then
     log_info "Cloning ${GITHUB_REPO} with GitHub CLI."
     gh repo clone "$GITHUB_REPO" "$TARGET_DIR"
@@ -178,16 +223,19 @@ handle_dirty_repo() {
   fi
 
   log_warn "Local changes detected in ${TARGET_DIR}."
+
   if [ "$NONINTERACTIVE" = "1" ]; then
     git stash push -u -m "install: auto-stash before update ($(date -Is))"
     return 0
   fi
 
   printf 'Choose how to handle local changes:\n  [c] Commit and continue\n  [s] Stash and continue\n  [a] Abort update and keep local files\n' > /dev/tty
+
   while :; do
     printf 'Action [c/s/a] (default: a): ' > /dev/tty
     IFS= read -r action < /dev/tty
     action="${action:-a}"
+
     case "$action" in
       c|C)
         printf 'Commit message (default: WIP: local changes): ' > /dev/tty
@@ -218,6 +266,7 @@ update_repo() {
 
   cd "$TARGET_DIR"
   git fetch --prune origin
+
   if git show-ref --verify --quiet "refs/heads/${GITHUB_BRANCH}"; then
     git checkout "$GITHUB_BRANCH"
   elif git show-ref --verify --quiet "refs/remotes/origin/${GITHUB_BRANCH}"; then
@@ -228,10 +277,12 @@ update_repo() {
   fi
 
   handle_dirty_repo
+
   if [ "$REPO_UPDATE_SKIPPED" = "1" ]; then
     log_warn 'Repository update skipped.'
     return 0
   fi
+
   git pull --rebase --autostash origin "$GITHUB_BRANCH"
 }
 
@@ -246,42 +297,83 @@ clone_or_update() {
   fi
 }
 
+quote_dotenv_value() {
+  local value="$1"
+  printf '%q' "$value"
+}
+
+validate_env_key() {
+  local key_name="$1"
+
+  case "$key_name" in
+    ''|*[!A-Za-z0-9_]*)
+      log_error "Invalid environment key name: ${key_name}"
+      exit 1
+      ;;
+    [0-9]*)
+      log_error "Environment key must not start with a number: ${key_name}"
+      exit 1
+      ;;
+  esac
+}
+
 upsert_env() {
-  file_path="$1"
-  key_name="$2"
-  key_value="$3"
+  local file_path="$1"
+  local key_name="$2"
+  local key_value="$3"
+  local quoted_value
+  local tmp_file
+
+  validate_env_key "$key_name"
+  quoted_value="$(quote_dotenv_value "$key_value")"
   tmp_file="$(mktemp)"
+
+  cleanup_tmp_file() {
+    rm -f "$tmp_file"
+  }
+  trap cleanup_tmp_file RETURN
+
   mkdir -p "$(dirname "$file_path")"
   [ -f "$file_path" ] || install -m 0600 /dev/null "$file_path"
-  if grep -q "^${key_name}=" "$file_path"; then
-    awk -v key="$key_name" -v value="$key_value" '$0 ~ "^" key "=" { print key "=" value; next } { print }' "$file_path" > "$tmp_file"
+
+  if grep -Fq "${key_name}=" "$file_path"; then
+    awk -v key="$key_name" -v value="$quoted_value" '
+      index($0, key "=") == 1 { print key "=" value; next }
+      { print }
+    ' "$file_path" > "$tmp_file"
   else
     cat "$file_path" > "$tmp_file"
-    printf '%s=%s\n' "$key_name" "$key_value" >> "$tmp_file"
+    printf '%s=%s\n' "$key_name" "$quoted_value" >> "$tmp_file"
   fi
+
   cat "$tmp_file" > "$file_path"
-  rm -f "$tmp_file"
   chmod 600 "$file_path" 2>/dev/null || true
+  trap - RETURN
+  cleanup_tmp_file
 }
 
 create_state() {
+  local env_file
+
   cd "$TARGET_DIR"
-  mkdir -p state/config state/secrets state/ansible state/terraform
-  chmod 700 state/secrets 2>/dev/null || true
+
+  mkdir -p state/config state/ansible
   env_file="${TARGET_DIR}/state/config/.env"
+
   upsert_env "$env_file" ROOT_DIR "$TARGET_DIR"
   upsert_env "$env_file" GITHUB_REPO "$GITHUB_REPO"
   upsert_env "$env_file" GITHUB_BRANCH "$GITHUB_BRANCH"
   upsert_env "$env_file" SETUP "$SETUP"
   upsert_env "$env_file" NONINTERACTIVE "$NONINTERACTIVE"
-  [ -f state/secrets/passwords.env ] || install -m 0600 /dev/null state/secrets/passwords.env
+
   if [ ! -f state/ansible/inventory.yml ] && [ -f templates/inventory.yml.tpl ]; then
-    cp templates/inventory.yml.tpl state/ansible/inventory.yml
+    install -m 0600 templates/inventory.yml.tpl state/ansible/inventory.yml
   fi
 }
 
 ensure_executables() {
   cd "$TARGET_DIR"
+
   if [ -x scripts/lib/ensure-executable-scripts.sh ]; then
     scripts/lib/ensure-executable-scripts.sh "$TARGET_DIR"
   else
@@ -293,20 +385,28 @@ install_task() {
   if [ "$TASK_INSTALL_REQUIRED" != "1" ]; then
     return 0
   fi
+
   if command -v task >/dev/null 2>&1; then
     return 0
   fi
+
   ensure_command gpg gpg
+
+  # Official Task Debian repository bootstrap. HTTPS/TLS is enforced and curl
+  # retries transient network failures, but this remains an external trust point.
   curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 \
     https://dl.cloudsmith.io/public/task/task/setup.deb.sh | as_root bash
+
   apt_install task
 }
 
 main() {
   echo '=========================================================='
-  echo '            HomeLab20260424 installer'
+  echo '            HomeLab installer'
   echo '=========================================================='
+
   select_setup
+  validate_setup
   ensure_prerequisites
   validate_branch_name
   resolve_target_dir
@@ -314,6 +414,7 @@ main() {
   create_state
   ensure_executables
   install_task
+
   log_success "Install complete. Next command: cd ${TARGET_DIR} && task bootstrap"
 }
 
