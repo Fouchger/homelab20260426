@@ -2,7 +2,7 @@
 # ==============================================================================
 # File: install.sh
 # Purpose:
-#   Bootstrap installer for the HomeLab20260424 project.
+#   Bootstrap installer for the HomeLab project.
 #
 # Notes:
 #   - Debian/Ubuntu oriented.
