@@ -19,8 +19,8 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
-readonly REPO_NAME="${HOMELAB_REPO_NAME:-HomeLab20260424}"
-readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/HomeLab20260424}"
+readonly REPO_NAME="${HOMELAB_REPO_NAME:-HomeLab20260426}"
+readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/HomeLab20260426}"
 readonly GITHUB_BRANCH="${GITHUB_BRANCH:-${HOMELAB_BRANCH:-main}}"
 readonly GIT_PROTOCOL="${HOMELAB_GIT_PROTOCOL:-https}"
 readonly NONINTERACTIVE="${NONINTERACTIVE:-0}"
@@ -398,7 +398,7 @@ install_task() {
 
 main() {
   echo '=========================================================='
-  echo '            HomeLab20260424 installer'
+  echo '            HomeLab installer'
   echo '=========================================================='
 
   select_setup
