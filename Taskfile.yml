@@ -83,9 +83,9 @@ tasks:
     desc: Set up the complete homelab control plane, then back up and plan MikroTik changes
     cmds:
       - |
-        bash ./scripts/lib/ensure-executable-scripts.sh
         clear
-        ./scripts/banner/banner.sh
+        bash ./scripts/banner/banner.sh
+        bash ./scripts/lib/ensure-executable-scripts.sh
       - task: proxmox_scripts:code-server:install
       - task: secrets_age:prepare
       - task: git_github:bootstrap
