@@ -42,6 +42,12 @@
           - mikrotik_routers | length > 0
         fail_msg: "Set MIKROTIK_NAME or MIKROTIK_ROUTERS in state/config/.env."
 
+    - name: Refuse to generate inventory without a MikroTik host
+      ansible.builtin.assert:
+        that:
+          - mikrotik_default_host | length > 0
+        fail_msg: "Set MIKROTIK_HOST in state/config/.env before generating inventory."
+
     - name: Render MikroTik inventory from environment values
       ansible.builtin.copy:
         dest: "{{ inventory_file }}"
