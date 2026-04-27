@@ -1,0 +1,23 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router/tasks/validate.yml
+# Purpose:
+#   Validate required variables before rendering or applying RouterOS config.
+# ==============================================================================
+
+- name: Validate router identity and VLAN list
+  ansible.builtin.assert:
+    that:
+      - mikrotik_router_identity | length > 0
+      - mikrotik_router_vlans | length > 0
+      - mikrotik_router_wan.vlan_id is defined
+    fail_msg: "MikroTik router desired-state variables are incomplete."
+
+- name: Validate required router secrets are supplied
+  ansible.builtin.assert:
+    that:
+      - lookup('vars', item, default='') | length > 0
+      - lookup('vars', item, default='') != 'CHANGE_ME'
+    fail_msg: "Required MikroTik secret is missing or still CHANGE_ME: {{ item }}"
+  loop: "{{ mikrotik_router_required_secret_keys }}"
+  no_log: true

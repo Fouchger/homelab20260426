@@ -1,0 +1,24 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/mikrotik_plan.yml
+# Purpose:
+#   Render desired MikroTik RouterOS configuration and diff it against the live router.
+# ============================================================================== 
+
+- name: Plan MikroTik RouterOS desired state
+  hosts: mikrotik
+  gather_facts: false
+
+  vars:
+    mikrotik_router_output_dir: "{{ lookup('env', 'MIKROTIK_OUTPUT_DIR') | default(playbook_dir ~ '/../../state/mikrotik/generated/' ~ lookup('pipe', 'date +%Y%m%d-%H%M%S'), true) }}"
+    mikrotik_router_render_only: false
+    mikrotik_router_apply_config: false
+    mikrotik_router_identity: "{{ lookup('env', 'MIKROTIK_ROUTER_IDENTITY') | default('RTR-MAIN', true) }}"
+    mikrotik_router_admin_password: "{{ lookup('env', 'MIKROTIK_ROUTER_ADMIN_PASSWORD') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_users: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_USERS') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_mgmt: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_MGMT') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_iot: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_IOT') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_guest: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_GUEST') | default('', true) }}"
+
+  roles:
+    - role: mikrotik_router

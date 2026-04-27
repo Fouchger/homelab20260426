@@ -1,0 +1,74 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router/tasks/diff.yml
+# Purpose:
+#   Export live RouterOS config and produce both sensitive and redacted diffs.
+# Notes:
+#   - Sensitive artefacts stay mode 0600 under state/mikrotik.
+#   - Use the redacted diff for normal review and approvals.
+# ==============================================================================
+
+- name: Export current RouterOS configuration with sensitive values
+  community.routeros.command:
+    commands:
+      - /export show-sensitive terse
+  register: mikrotik_router_current_export
+  no_log: true
+
+- name: Write current RouterOS export for sensitive diff
+  ansible.builtin.copy:
+    dest: "{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-current.rsc"
+    mode: '0600'
+    content: "{{ mikrotik_router_current_export.stdout[0] | default('') }}\n"
+  delegate_to: localhost
+  no_log: true
+
+- name: Render redacted current RouterOS export for operator diff
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sed -E \
+      -e 's/passphrase=[^ ]+/passphrase=REDACTED/g' \
+      -e 's/password="[^"]*"/password="REDACTED"/g' \
+      -e 's/password=[^ ]+/password=REDACTED/g' \
+      '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-current.rsc' \
+      > '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-current.redacted.rsc'
+    chmod 0640 '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-current.redacted.rsc'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  delegate_to: localhost
+
+- name: Generate sensitive local diff between current export and desired install script
+  ansible.builtin.shell: |
+    set -euo pipefail
+    diff -u \
+      '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-current.rsc' \
+      '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.rsc' \
+      > '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.sensitive.patch' || true
+    chmod 0600 '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.sensitive.patch'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  delegate_to: localhost
+  no_log: true
+
+- name: Generate redacted local diff for operator review
+  ansible.builtin.shell: |
+    set -euo pipefail
+    diff -u \
+      '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-current.redacted.rsc' \
+      '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.redacted.rsc' \
+      > '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.redacted.patch' || true
+    chmod 0640 '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.redacted.patch'
+    printf 'ok\n' > '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-plan-reviewed.marker'
+    chmod 0640 '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-plan-reviewed.marker'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  delegate_to: localhost
+
+- name: Confirm diff output locations
+  ansible.builtin.debug:
+    msg:
+      - "Redacted MikroTik diff: {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.redacted.patch"
+      - "Sensitive MikroTik diff: {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.sensitive.patch"

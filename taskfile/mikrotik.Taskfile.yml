@@ -1,0 +1,295 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/mikrotik.Taskfile.yml
+# Purpose:
+#   Lightweight MikroTik RouterOS operator entrypoints for Ansible playbooks.
+# Notes:
+#   - Taskfile manages local convenience actions only: config prompts, SSH trust,
+#     ssh-copy-id, and playbook invocation.
+#   - Router configuration logic lives in Ansible playbooks and roles.
+#   - Runtime inventory is generated at state/ansible/inventory.yml.
+# =============================================================================
+
+version: '3'
+
+silent: true
+
+vars:
+  ANSIBLE_CONFIG_FILE: '{{.ROOT_DIR}}/ansible.cfg'
+  ANSIBLE_INVENTORY_FILE: '{{.STATE_DIR}}/ansible/inventory.yml'
+  MIKROTIK_OUTPUT_ROOT: '{{.STATE_DIR}}/mikrotik/generated'
+  MIKROTIK_BACKUP_ROOT: '{{.STATE_DIR}}/mikrotik'
+  MIKROTIK_DEFAULT_NAME: '{{default "hap-ax2" .MIKROTIK_NAME}}'
+  MIKROTIK_DEFAULT_PORT: '{{default "22" .MIKROTIK_PORT}}'
+  MIKROTIK_DEFAULT_USER: '{{default "admin" .MIKROTIK_USER}}'
+  MIKROTIK_HOST_KEY_CHECKING: '{{default "false" .MIKROTIK_HOST_KEY_CHECKING}}'
+
+tasks:
+  default:
+    desc: Show available MikroTik tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show available MikroTik tasks
+    cmds:
+      - task --taskfile '{{.TASKFILE}}' --list
+
+  bootstrap:
+    desc: Prepare Ansible dependencies, MikroTik connection values, SSH access, and inventory
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Prepare Ansible dependencies, MikroTik connection values, SSH access, and inventory" "PEACH"    
+      - task: :ansible:bootstrap
+      - task: connection:ensure
+      - task: ssh-copy-id
+      - task: :ansible:inventory:render
+
+  connection:ensure:
+    desc: Ensure MikroTik connection values exist in state/config/.env
+    cmds:
+      - |
+        # =============================================================================
+        # Task: connection:ensure
+        # Purpose:
+        #   Resolve and persist standard MikroTik connection values for inventory.
+        # =============================================================================
+        set -euo pipefail
+        mkdir -p '{{.CONFIG_DIR}}' '{{.TMP_DIR}}'
+        chmod 700 '{{.CONFIG_DIR}}' '{{.TMP_DIR}}'
+        touch '{{.CONFIG_ENV_FILE}}'
+        chmod 600 '{{.CONFIG_ENV_FILE}}'
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        upsert_env_value() {
+          env_key="$1"
+          env_value="$2"
+          temp_file="$(mktemp '{{.TMP_DIR}}/mikrotik-env.XXXXXX')"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 != key' '{{.CONFIG_ENV_FILE}}' > "$temp_file"
+          fi
+          printf '%s=%s\n' "$env_key" "$env_value" >> "$temp_file"
+          mv "$temp_file" '{{.CONFIG_ENV_FILE}}'
+          chmod 600 '{{.CONFIG_ENV_FILE}}'
+        }
+
+        prompt_value() {
+          prompt_text="$1"
+          default_value="$2"
+          if [ -n "$default_value" ]; then
+            printf '%s' "$default_value"
+            return 0
+          fi
+          if [ '{{.NONINTERACTIVE}}' = '1' ]; then
+            printf '%s' "$default_value"
+            return 0
+          fi
+          printf '%s' "$prompt_text" > /dev/tty
+          IFS= read -r value < /dev/tty
+          printf '%s' "$value"
+        }
+
+        mikrotik_name="${MIKROTIK_NAME:-$(get_env_value MIKROTIK_NAME)}"
+        mikrotik_host="${MIKROTIK_HOST:-$(get_env_value MIKROTIK_HOST)}"
+        mikrotik_user="${MIKROTIK_USER:-$(get_env_value MIKROTIK_USER)}"
+        mikrotik_port="${MIKROTIK_PORT:-$(get_env_value MIKROTIK_PORT)}"
+        mikrotik_command_timeout="${MIKROTIK_COMMAND_TIMEOUT:-$(get_env_value MIKROTIK_COMMAND_TIMEOUT)}"
+        mikrotik_host_key_checking="${MIKROTIK_HOST_KEY_CHECKING:-$(get_env_value MIKROTIK_HOST_KEY_CHECKING)}"
+
+        mikrotik_name="${mikrotik_name:-{{.MIKROTIK_DEFAULT_NAME}}}"
+        mikrotik_user="${mikrotik_user:-{{.MIKROTIK_DEFAULT_USER}}}"
+        mikrotik_port="${mikrotik_port:-{{.MIKROTIK_DEFAULT_PORT}}}"
+        mikrotik_command_timeout="${mikrotik_command_timeout:-120}"
+        mikrotik_host_key_checking="${mikrotik_host_key_checking:-{{.MIKROTIK_HOST_KEY_CHECKING}}}"
+        mikrotik_host="$(prompt_value 'MikroTik SSH host or IP address: ' "$mikrotik_host")"
+
+        [ -n "$mikrotik_host" ] || { echo 'MIKROTIK_HOST is required.' >&2; exit 1; }
+
+        upsert_env_value MIKROTIK_NAME "$mikrotik_name"
+        upsert_env_value MIKROTIK_HOST "$mikrotik_host"
+        upsert_env_value MIKROTIK_USER "$mikrotik_user"
+        upsert_env_value MIKROTIK_PORT "$mikrotik_port"
+        upsert_env_value MIKROTIK_COMMAND_TIMEOUT "$mikrotik_command_timeout"
+        upsert_env_value MIKROTIK_HOST_KEY_CHECKING "$mikrotik_host_key_checking"
+
+        echo "MikroTik connection configured for ${mikrotik_user}@${mikrotik_host}:${mikrotik_port}."
+
+  ssh-copy-id:
+    desc: Add the local SSH public key to configured MikroTik router hosts if needed
+    deps:
+      - :ssh:generate
+      - :ansible:tools:check
+    cmds:
+      - |
+        # =============================================================================
+        # Task: ssh-copy-id
+        # Purpose:
+        #   Ensure key-based SSH access to MikroTik hosts used by Ansible.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        normalise_router_key() {
+          printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed -E 's/[^A-Z0-9]+/_/g; s/^_+//; s/_+$//'
+        }
+
+        router_targets="${MIKROTIK_ROUTERS:-$(get_env_value MIKROTIK_ROUTERS)}"
+        if [ -z "$router_targets" ]; then
+          router_targets="${MIKROTIK_NAME:-$(get_env_value MIKROTIK_NAME)}"
+        fi
+        router_targets="${router_targets:-{{.MIKROTIK_DEFAULT_NAME}}}"
+
+        default_host="${MIKROTIK_HOST:-$(get_env_value MIKROTIK_HOST)}"
+        default_user="${MIKROTIK_USER:-$(get_env_value MIKROTIK_USER)}"
+        default_port="${MIKROTIK_PORT:-$(get_env_value MIKROTIK_PORT)}"
+        default_timeout="${MIKROTIK_COMMAND_TIMEOUT:-$(get_env_value MIKROTIK_COMMAND_TIMEOUT)}"
+        default_user="${default_user:-{{.MIKROTIK_DEFAULT_USER}}}"
+        default_port="${default_port:-{{.MIKROTIK_DEFAULT_PORT}}}"
+        default_timeout="${default_timeout:-10}"
+
+        [ -f '{{.SSH_KEY_PATH}}.pub' ] || { echo 'Public key not found. Run task ssh:generate first.' >&2; exit 1; }
+
+        printf '%s' "$router_targets" | tr ',' '\n' | sed -E 's/^ +//; s/ +$//; /^$/d' | while IFS= read -r router_name; do
+          router_key="$(normalise_router_key "$router_name")"
+          eval scoped_host="\${MIKROTIK_${router_key}_HOST:-}"
+          eval scoped_user="\${MIKROTIK_${router_key}_USER:-}"
+          eval scoped_port="\${MIKROTIK_${router_key}_PORT:-}"
+
+          host="${scoped_host:-$(get_env_value MIKROTIK_${router_key}_HOST)}"
+          user="${scoped_user:-$(get_env_value MIKROTIK_${router_key}_USER)}"
+          port="${scoped_port:-$(get_env_value MIKROTIK_${router_key}_PORT)}"
+          host="${host:-$default_host}"
+          user="${user:-$default_user}"
+          port="${port:-$default_port}"
+
+          [ -n "$host" ] || { echo "No host configured for ${router_name}. Set MIKROTIK_HOST or MIKROTIK_${router_key}_HOST." >&2; exit 1; }
+
+          known_hosts_target="$host"
+          if [ "$port" != '22' ]; then
+            known_hosts_target="[$host]:$port"
+          fi
+
+          if ! ssh-keygen -F "$known_hosts_target" -f '{{.SSH_KNOWN_HOSTS_FILE}}' >/dev/null 2>&1; then
+            echo "Trusting MikroTik SSH host key for ${known_hosts_target}."
+            ssh-keyscan -T "$default_timeout" -p "$port" "$host" >> '{{.SSH_KNOWN_HOSTS_FILE}}' 2>/dev/null
+            chmod 600 '{{.SSH_KNOWN_HOSTS_FILE}}'
+          fi
+
+          if ssh \
+            -i '{{.SSH_KEY_PATH}}' \
+            -p "$port" \
+            -o BatchMode=yes \
+            -o ConnectTimeout="$default_timeout" \
+            -o StrictHostKeyChecking=yes \
+            "$user@$host" ':put "ok"' >/dev/null 2>&1; then
+            echo "SSH key already works for ${router_name} (${user}@${host}:${port})."
+            continue
+          fi
+
+          echo "Installing SSH key for ${router_name} (${user}@${host}:${port})."
+          ssh-copy-id \
+            -i '{{.SSH_KEY_PATH}}.pub' \
+            -p "$port" \
+            -o ConnectTimeout="$default_timeout" \
+            -o StrictHostKeyChecking=yes \
+            "$user@$host"
+        done
+
+  backup:
+    desc: Back up MikroTik RouterOS configuration using Ansible
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Back up MikroTik RouterOS configuration using Ansible" "PEACH"   
+      - task: :ansible:inventory:render
+      - |
+        set -euo pipefail
+        backup_stamp="$(date +%Y%m%d-%H%M)"
+        mkdir -p '{{.MIKROTIK_BACKUP_ROOT}}'
+        chmod 700 '{{.MIKROTIK_BACKUP_ROOT}}'
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_HOST_KEY_CHECKING='{{.MIKROTIK_HOST_KEY_CHECKING}}' \
+        MIKROTIK_BACKUP_ROOT='{{.MIKROTIK_BACKUP_ROOT}}' \
+        MIKROTIK_BACKUP_STAMP="$backup_stamp" \
+          ansible-playbook \
+            -i '{{.ANSIBLE_INVENTORY_FILE}}' \
+            '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_backup.yml'
+
+  render:
+    desc: Render the desired MikroTik RouterOS configuration only
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Render the desired MikroTik RouterOS configuration only" "PEACH"   
+      - task: :ansible:inventory:render
+      - |
+        set -euo pipefail
+        output_dir='{{.MIKROTIK_OUTPUT_ROOT}}/'"$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$output_dir"
+        chmod 700 "$output_dir"
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+        MIKROTIK_OUTPUT_DIR="$output_dir" \
+          ansible-playbook \
+            -i '{{.ANSIBLE_INVENTORY_FILE}}' \
+            '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_render.yml'
+
+  plan:
+    desc: Render and diff desired MikroTik RouterOS configuration against the live router
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Render and diff desired MikroTik RouterOS configuration against the live routery" "PEACH"   
+      - task: :ansible:inventory:render
+      - |
+        set -euo pipefail
+        output_dir='{{.MIKROTIK_OUTPUT_ROOT}}/'"$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$output_dir"
+        chmod 700 "$output_dir"
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_HOST_KEY_CHECKING='{{.MIKROTIK_HOST_KEY_CHECKING}}' \
+        MIKROTIK_OUTPUT_DIR="$output_dir" \
+          ansible-playbook \
+            -i '{{.ANSIBLE_INVENTORY_FILE}}' \
+            '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_plan.yml'
+
+  apply:
+    desc: Render, diff, confirm, and apply desired MikroTik RouterOS configuration
+    cmds:
+      - task: :ansible:inventory:render
+      - |
+        set -euo pipefail
+        output_dir='{{.MIKROTIK_OUTPUT_ROOT}}/'"$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$output_dir"
+        chmod 700 "$output_dir"
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_HOST_KEY_CHECKING='{{.MIKROTIK_HOST_KEY_CHECKING}}' \
+        MIKROTIK_OUTPUT_DIR="$output_dir" \
+          ansible-playbook \
+            -i '{{.ANSIBLE_INVENTORY_FILE}}' \
+            '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_apply.yml'

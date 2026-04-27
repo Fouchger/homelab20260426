@@ -59,6 +59,8 @@ vars:
 
 
 includes:
+  ansible: ./taskfile/ansible.Taskfile.yml
+  mikrotik: ./taskfile/mikrotik.Taskfile.yml
   git_github: ./taskfile/git_github.Taskfile.yml
   ssh: ./taskfile/ssh.Taskfile.yml
   proxmox: ./taskfile/proxmox.Taskfile.yml
@@ -90,6 +92,11 @@ tasks:
       - task: secrets_openbao:prepare
       - task: ssh:bootstrap
       - task: proxmox:bootstrap
+      - task: ansible:bootstrap
+      - task: mikrotik:bootstrap
+      - task: mikrotik:backup
+      - task: mikrotik:render
+      - task: mikrotik:plan
 
 
   

@@ -1,0 +1,64 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router/tasks/render.yml
+# Purpose:
+#   Render the desired RouterOS install script and non-secret review artefacts.
+# Notes:
+#   - The install script is mode 0600 because it contains runtime secrets.
+#   - Operators should inspect the redacted preview for routine review.
+# ==============================================================================
+
+- name: Ensure local MikroTik generated directory exists
+  ansible.builtin.file:
+    path: "{{ mikrotik_router_output_dir }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  run_once: true
+
+- name: Render desired RouterOS install script containing runtime secrets
+  ansible.builtin.template:
+    src: routeros-install.rsc.j2
+    dest: "{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.rsc"
+    mode: '0600'
+  delegate_to: localhost
+  no_log: true
+
+- name: Render redacted RouterOS install preview for operator review
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sed -E \
+      -e 's/passphrase="[^"]*"/passphrase="REDACTED"/g' \
+      -e 's/password="[^"]*"/password="REDACTED"/g' \
+      '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.rsc' \
+      > '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.redacted.rsc'
+    chmod 0640 '{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.redacted.rsc'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  delegate_to: localhost
+
+- name: Write non-secret RouterOS generation manifest
+  ansible.builtin.copy:
+    dest: "{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-manifest.txt"
+    mode: '0640'
+    content: |
+      # ==============================================================================
+      # File: {{ inventory_hostname }}-manifest.txt
+      # Purpose:
+      #   Non-secret metadata for generated MikroTik desired state.
+      # ==============================================================================
+      host={{ inventory_hostname }}
+      identity={{ mikrotik_router_identity }}
+      config_version={{ mikrotik_router_config_version }}
+      sensitive_install={{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.rsc
+      redacted_preview={{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.redacted.rsc
+      apply_enabled={{ mikrotik_router_apply_config }}
+      render_only={{ mikrotik_router_render_only }}
+  delegate_to: localhost
+
+- name: Confirm rendered RouterOS install paths
+  ansible.builtin.debug:
+    msg:
+      - "Sensitive MikroTik install script: {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.rsc"
+      - "Redacted review copy: {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.redacted.rsc"

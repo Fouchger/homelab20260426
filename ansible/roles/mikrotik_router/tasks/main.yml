@@ -1,0 +1,23 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router/tasks/main.yml
+# Purpose:
+#   Render, compare and optionally apply the MikroTik RouterOS desired state.
+# Notes:
+#   - The default path is safe: render and diff only.
+#   - Actual router changes require mikrotik_router_apply_config=true.
+# ==============================================================================
+
+- name: Validate MikroTik router inputs
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Render MikroTik desired configuration locally
+  ansible.builtin.import_tasks: render.yml
+
+- name: Compare current router export with desired configuration
+  ansible.builtin.import_tasks: diff.yml
+  when: not mikrotik_router_render_only | bool
+
+- name: Apply MikroTik desired configuration
+  ansible.builtin.import_tasks: apply.yml
+  when: mikrotik_router_apply_config | bool

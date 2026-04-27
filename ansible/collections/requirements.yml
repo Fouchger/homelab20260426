@@ -1,0 +1,13 @@
+---
+# ==============================================================================
+# File: ansible/collections/requirements.yml
+# Purpose:
+#   Ansible collection requirements for homelab automation.
+# Notes:
+#   - community.routeros provides MikroTik RouterOS modules and plugins.
+#   - ansible.netcommon provides the network_cli connection used over SSH.
+# ==============================================================================
+
+collections:
+  - name: ansible.netcommon
+  - name: community.routeros

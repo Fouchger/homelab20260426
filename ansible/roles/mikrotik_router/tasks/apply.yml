@@ -1,0 +1,151 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router/tasks/apply.yml
+# Purpose:
+#   Apply the rendered RouterOS desired state after explicit post-plan approval.
+# Notes:
+#   - This task imports a full clean-build script. The script removes managed
+#     objects first so settings not in desired state are cleaned up.
+#   - Apply is intentionally guarded by a generated plan marker and a typed
+#     confirmation phrase shown after the diff has been generated.
+#   - RouterOS Safe Mode is terminal-session dependent. The role can attempt to
+#     use it where supported, and always keeps a pre-apply backup for recovery.
+# ==============================================================================
+
+- name: Require plan artefact before apply
+  ansible.builtin.stat:
+    path: "{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-plan-reviewed.marker"
+  register: mikrotik_router_plan_marker
+  delegate_to: localhost
+
+- name: Stop if plan step did not run in this operation
+  ansible.builtin.assert:
+    that:
+      - mikrotik_router_plan_marker.stat.exists
+    fail_msg: "Apply refused because the redacted plan/diff was not generated in this operation. Run task router:plan first, review the redacted diff, then task router:apply."
+  when: mikrotik_router_require_plan_before_apply | bool
+
+- name: Show apply review artefacts before confirmation
+  ansible.builtin.debug:
+    msg:
+      - "Review before apply: {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.redacted.rsc"
+      - "Review diff: {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-diff.redacted.patch"
+      - "To continue, type exactly: {{ mikrotik_router_expected_apply_confirmation }}"
+
+- name: Prompt for post-plan apply confirmation
+  ansible.builtin.pause:
+    prompt: "Type {{ mikrotik_router_expected_apply_confirmation }} to import the generated configuration"
+  register: mikrotik_router_apply_confirmation_prompt
+  when: mikrotik_router_apply_confirmation | length == 0
+
+- name: Resolve apply confirmation value
+  ansible.builtin.set_fact:
+    mikrotik_router_resolved_apply_confirmation: >-
+      {{ mikrotik_router_apply_confirmation
+         if (mikrotik_router_apply_confirmation | length > 0)
+         else (mikrotik_router_apply_confirmation_prompt.user_input | default('')) }}
+
+- name: Stop if apply confirmation phrase is incorrect
+  ansible.builtin.assert:
+    that:
+      - mikrotik_router_resolved_apply_confirmation == mikrotik_router_expected_apply_confirmation or mikrotik_router_resolved_apply_confirmation == "APPLY_ALL"
+    fail_msg: "Apply refused. Expected confirmation phrase: {{ mikrotik_router_expected_apply_confirmation }}. Protected automation may use APPLY_ALL."
+
+- name: Create pre-apply MikroTik backup
+  community.routeros.command:
+    commands:
+      - /system backup save name=pre-ansible-apply
+      - /export show-sensitive file=pre-ansible-apply
+  when: mikrotik_router_backup_before_apply | bool
+  no_log: true
+
+- name: Attempt to enable RouterOS Safe Mode when requested
+  community.routeros.command:
+    commands:
+      - /system/console/safe-mode enable
+  register: mikrotik_router_safe_mode_enable
+  changed_when: false
+  failed_when: false
+  when: mikrotik_router_safe_mode | bool
+  no_log: true
+
+- name: Record whether RouterOS Safe Mode was enabled
+  ansible.builtin.set_fact:
+    mikrotik_router_safe_mode_enabled: "{{ (mikrotik_router_safe_mode_enable is defined) and (mikrotik_router_safe_mode_enable.msg is not defined) }}"
+
+- name: Warn when RouterOS Safe Mode is unavailable
+  ansible.builtin.debug:
+    msg: "RouterOS Safe Mode could not be enabled through this Ansible session; continuing with pre-apply backup and best-effort rollback."
+  when:
+    - mikrotik_router_safe_mode | bool
+    - not mikrotik_router_safe_mode_enabled | bool
+
+- name: Copy rendered install script to router
+  ansible.netcommon.net_put:
+    src: "{{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-install.rsc"
+    dest: "{{ inventory_hostname }}-install.rsc"
+  no_log: true
+
+- name: Import rendered install script on router
+  block:
+    - name: Import rendered install script on router
+      community.routeros.command:
+        commands:
+          - "/import file-name={{ inventory_hostname }}-install.rsc"
+      no_log: true
+
+  rescue:
+    - name: Remove uploaded install script after failed import
+      community.routeros.command:
+        commands:
+          - "/file remove [find name={{ inventory_hostname }}-install.rsc]"
+      failed_when: false
+      no_log: true
+
+    - name: Attempt backup restore after failed import when enabled
+      community.routeros.command:
+        commands:
+          - /system backup load name=pre-ansible-apply.backup
+      failed_when: false
+      ignore_unreachable: true
+      when:
+        - mikrotik_router_auto_rollback_on_failure | bool
+        - mikrotik_router_backup_before_apply | bool
+      no_log: true
+
+    - name: Stop after failed import with rollback guidance
+      ansible.builtin.fail:
+        msg: >-
+          MikroTik import failed. A pre-apply backup named pre-ansible-apply was created when backup_before_apply=true.
+          Best-effort rollback was {{ 'attempted' if mikrotik_router_auto_rollback_on_failure | bool else 'not attempted' }}.
+          If connectivity is affected, restore pre-ansible-apply.backup from console or Winbox.
+
+- name: Remove uploaded install script from router
+  community.routeros.command:
+    commands:
+      - "/file remove [find name={{ inventory_hostname }}-install.rsc]"
+  failed_when: false
+  no_log: true
+
+- name: Disable RouterOS Safe Mode after successful import when it was enabled
+  community.routeros.command:
+    commands:
+      - /system/console/safe-mode disable
+  failed_when: false
+  when: mikrotik_router_safe_mode_enabled | default(false) | bool
+  no_log: true
+
+- name: Verify router identity after apply
+  community.routeros.command:
+    commands:
+      - /system identity print
+      - /ip service print
+      - /interface bridge print
+  register: mikrotik_router_verify
+
+- name: Show non-secret apply confirmation
+  ansible.builtin.debug:
+    msg:
+      - "MikroTik apply completed for {{ inventory_hostname }}."
+      - "Review {{ mikrotik_router_output_dir }}/{{ inventory_hostname }}-manifest.txt for generated metadata."
+      - "Safe mode requested={{ mikrotik_router_safe_mode }}, enabled={{ mikrotik_router_safe_mode_enabled | default(false) }}."

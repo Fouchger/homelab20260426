@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/ansible.Taskfile.yml
+# Purpose:
+#   Install and maintain the Ansible runtime for homelab automation.
+# Notes:
+#   - Installs Ansible and ansible-galaxy on Debian/Ubuntu systems.
+#   - Installs required Galaxy collections from ansible/collections/requirements.yml.
+#   - Generates state/ansible/inventory.yml from values loaded from state/config/.env.
+# =============================================================================
+
+version: '3'
+
+silent: true
+
+vars:
+  ANSIBLE_CONFIG_FILE: '{{.ROOT_DIR}}/ansible.cfg'
+  ANSIBLE_COLLECTION_REQUIREMENTS_FILE: '{{.ROOT_DIR}}/ansible/collections/requirements.yml'
+  ANSIBLE_INVENTORY_FILE: '{{.STATE_DIR}}/ansible/inventory.yml'
+
+tasks:
+  default:
+    desc: Show available Ansible tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show available Ansible tasks
+    cmds:
+      - task --taskfile '{{.TASKFILE}}' --list
+
+  bootstrap:
+    desc: Install Ansible and required Galaxy collections, then generate inventory
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Install Ansible and required Galaxy collections, then generate inventory" "PEACH"    
+      - task: tools:install
+      - task: collections:install
+      - task: inventory:render
+
+  tools:check:apt:
+    internal: true
+    desc: Ensure Debian or Ubuntu package tooling is available
+    cmds:
+      - |
+        set -euo pipefail
+        command -v apt-get >/dev/null 2>&1
+        command -v dpkg >/dev/null 2>&1
+        [ -r /etc/os-release ]
+        os_id="$(. /etc/os-release && printf '%s' "$ID")"
+        case "$os_id" in
+          ubuntu|debian) ;;
+          *) echo "Unsupported distribution: ${os_id}. Only Ubuntu and Debian are supported." >&2; exit 1 ;;
+        esac
+
+  tools:install:
+    desc: Install Ansible, ansible-galaxy, and supporting tools
+    deps: [tools:check:apt]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: tools:install
+        # Purpose:
+        #   Install the local Ansible control-node tooling.
+        # =============================================================================
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          ansible \
+          ansible-core \
+          ca-certificates \
+          openssh-client \
+          python3 \
+          python3-pip \
+          sshpass
+      - task: tools:check
+
+  tools:check:
+    desc: Validate Ansible CLI tooling
+    cmds:
+      - |
+        set -euo pipefail
+        missing=0
+        for tool in ansible ansible-playbook ansible-galaxy ssh ssh-copy-id ssh-keyscan; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "Missing required tool: $tool" >&2
+            missing=1
+          fi
+        done
+        [ "$missing" -eq 0 ]
+        echo 'Ansible tooling check completed successfully.'
+
+  collections:install:
+    desc: Install Ansible Galaxy collection requirements
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: collections:install
+        # Purpose:
+        #   Install Galaxy collections required by homelab playbooks.
+        # =============================================================================
+        set -euo pipefail
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+          ansible-galaxy collection install \
+            -r '{{.ANSIBLE_COLLECTION_REQUIREMENTS_FILE}}' \
+            -p '{{.ROOT_DIR}}/ansible/collections'
+
+  inventory:render:
+    desc: Generate state/ansible/inventory.yml from state/config/.env values
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: inventory:render
+        # Purpose:
+        #   Generate the runtime Ansible inventory using an Ansible localhost playbook.
+        # =============================================================================
+        set -euo pipefail
+        mkdir -p '{{.STATE_DIR}}/ansible'
+        chmod 700 '{{.STATE_DIR}}/ansible'
+        ROOT_DIR='{{.ROOT_DIR}}' \
+        STATE_DIR='{{.STATE_DIR}}' \
+        SSH_KEY_PATH='{{.SSH_KEY_PATH}}' \
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+          ansible-playbook \
+            -i 'localhost,' \
+            -c local \
+            '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_inventory.yml'
+
+  inventory:show:
+    desc: Show the generated Ansible inventory
+    cmds:
+      - |
+        set -euo pipefail
+        if [ ! -f '{{.ANSIBLE_INVENTORY_FILE}}' ]; then
+          echo 'Inventory has not been generated yet. Run task ansible:inventory:render first.' >&2
+          exit 1
+        fi
+        cat '{{.ANSIBLE_INVENTORY_FILE}}'

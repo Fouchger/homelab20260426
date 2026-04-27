@@ -1,0 +1,32 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/mikrotik_apply.yml
+# Purpose:
+#   Render, diff, confirm, and apply the desired MikroTik RouterOS configuration.
+# Notes:
+#   - This playbook imports a full managed RouterOS configuration.
+#   - Review the redacted plan before confirming an apply.
+# ============================================================================== 
+
+- name: Apply MikroTik RouterOS desired state
+  hosts: mikrotik
+  gather_facts: false
+  serial: "{{ lookup('env', 'MIKROTIK_APPLY_SERIAL') | default('1', true) }}"
+
+  vars:
+    mikrotik_router_output_dir: "{{ lookup('env', 'MIKROTIK_OUTPUT_DIR') | default(playbook_dir ~ '/../../state/mikrotik/generated/' ~ lookup('pipe', 'date +%Y%m%d-%H%M%S'), true) }}"
+    mikrotik_router_render_only: false
+    mikrotik_router_apply_config: true
+    mikrotik_router_identity: "{{ lookup('env', 'MIKROTIK_ROUTER_IDENTITY') | default('RTR-MAIN', true) }}"
+    mikrotik_router_admin_password: "{{ lookup('env', 'MIKROTIK_ROUTER_ADMIN_PASSWORD') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_users: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_USERS') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_mgmt: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_MGMT') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_iot: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_IOT') | default('', true) }}"
+    mikrotik_router_wifi_passphrase_guest: "{{ lookup('env', 'MIKROTIK_WIFI_PASSPHRASE_GUEST') | default('', true) }}"
+    mikrotik_router_apply_confirmation: "{{ lookup('env', 'ROUTER_APPLY_CONFIRM') | default('', true) }}"
+    mikrotik_router_expected_apply_confirmation: "APPLY {{ inventory_hostname }}"
+    mikrotik_router_safe_mode: "{{ (lookup('env', 'MIKROTIK_SAFE_MODE') | default('false', true)) | bool }}"
+    mikrotik_router_auto_rollback_on_failure: "{{ (lookup('env', 'MIKROTIK_AUTO_ROLLBACK_ON_FAILURE') | default('true', true)) | bool }}"
+
+  roles:
+    - role: mikrotik_router

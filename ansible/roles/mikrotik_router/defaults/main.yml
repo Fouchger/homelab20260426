@@ -1,0 +1,273 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router/defaults/main.yml
+# Purpose:
+#   Default MikroTik RouterOS desired state for the homelab edge router.
+# Notes:
+#   - Non-secret defaults are derived from the current hap-ax2 backup and the
+#     existing production gold build sample.
+#   - Secrets are supplied at runtime from the repository encrypted dotenv store.
+#   - The role renders a deterministic install script and can compare it with
+#     the live export before an apply.
+# ==============================================================================
+
+mikrotik_router_identity: "RTR-MAIN"
+mikrotik_router_timezone: "Pacific/Auckland"
+mikrotik_router_note: "RTR-MAIN Production Gold Build - VLAN segmented baseline"
+mikrotik_router_wifi_country: "New Zealand"
+mikrotik_router_enable_ipv6: false
+mikrotik_router_cleanup_enabled: true
+mikrotik_router_apply_config: false
+mikrotik_router_render_only: true
+mikrotik_router_safe_mode: false
+# Safe mode is optional because RouterOS Safe Mode is terminal-session dependent.
+# When enabled, the role attempts to enable/disable it and falls back to backup-based recovery if unsupported.
+mikrotik_router_backup_before_apply: true
+mikrotik_router_auto_rollback_on_failure: true
+mikrotik_router_apply_confirmation: ""
+mikrotik_router_expected_apply_confirmation: "APPLY {{ inventory_hostname }}"
+mikrotik_router_apply_serial: "1"
+mikrotik_router_require_plan_before_apply: true
+mikrotik_router_redact_generated_preview: true
+mikrotik_router_enable_vlan_filtering_last: true
+mikrotik_router_config_version: "2026.04.26"
+
+mikrotik_router_wan:
+  vlan_id: 10
+  name: "WAN"
+  interface: "ether1"
+  vlan_interface: "VLAN10-WAN"
+  comment: "WAN VLAN"
+  use_peer_dns: "no"
+  use_peer_ntp: "no"
+  add_default_route: "yes"
+
+mikrotik_router_bridge:
+  name: "bridge"
+  comment: "Main VLAN-aware bridge"
+  protocol_mode: "rstp"
+
+mikrotik_router_ports:
+  - interface: "ether2"
+    comment: "Tagged LAN trunk"
+    mode: "trunk"
+    frame_types: "admit-only-vlan-tagged"
+    ingress_filtering: "yes"
+  - interface: "ether3"
+    comment: "MGMT access"
+    mode: "access"
+    pvid: 20
+    frame_types: "admit-only-untagged-and-priority-tagged"
+    ingress_filtering: "yes"
+  - interface: "ether4"
+    comment: "USERS access"
+    mode: "access"
+    pvid: 40
+    frame_types: "admit-only-untagged-and-priority-tagged"
+    ingress_filtering: "yes"
+  - interface: "ether5"
+    comment: "USERS access"
+    mode: "access"
+    pvid: 40
+    frame_types: "admit-only-untagged-and-priority-tagged"
+    ingress_filtering: "yes"
+
+mikrotik_router_interface_lists:
+  - { name: "WAN", comment: "Internet uplink" }
+  - { name: "LAN", comment: "Bridge only" }
+  - { name: "MGMT", comment: "Management VLAN" }
+  - { name: "SERVERS", comment: "Servers VLAN" }
+  - { name: "USERS", comment: "Users VLAN" }
+  - { name: "IOT", comment: "IoT VLAN" }
+  - { name: "GUEST", comment: "Guest VLAN" }
+  - { name: "STORAGE", comment: "Storage VLAN" }
+  - { name: "DMZ", comment: "DMZ VLAN" }
+  - { name: "INTERNAL", comment: "All internal routed VLANs" }
+
+mikrotik_router_vlans:
+  - key: "mgmt"
+    id: 20
+    name: "MGMT"
+    interface_list: "MGMT"
+    subnet: "192.168.20.0/24"
+    gateway: "192.168.20.1"
+    network: "192.168.20.0"
+    pool: "192.168.20.100-192.168.20.199"
+    lease_time: "1d"
+    domain: "mgmt.home.arpa"
+    tagged: ["bridge", "ether2", "wifi1-mgmt", "wifi2-mgmt"]
+    untagged: ["ether3"]
+    comment: "MGMT"
+  - key: "servers"
+    id: 30
+    name: "SERVERS"
+    interface_list: "SERVERS"
+    subnet: "192.168.30.0/24"
+    gateway: "192.168.30.1"
+    network: "192.168.30.0"
+    pool: "192.168.30.100-192.168.30.199"
+    lease_time: "1d"
+    domain: "servers.home.arpa"
+    tagged: ["bridge", "ether2"]
+    untagged: []
+    comment: "SERVERS"
+  - key: "users"
+    id: 40
+    name: "USERS"
+    interface_list: "USERS"
+    subnet: "192.168.40.0/24"
+    gateway: "192.168.40.1"
+    network: "192.168.40.0"
+    pool: "192.168.40.100-192.168.40.199"
+    lease_time: "1d"
+    domain: "users.home.arpa"
+    tagged: ["bridge", "ether2", "wifi1", "wifi2"]
+    untagged: ["ether4", "ether5"]
+    comment: "USERS"
+  - key: "iot"
+    id: 50
+    name: "IOT"
+    interface_list: "IOT"
+    subnet: "192.168.50.0/24"
+    gateway: "192.168.50.1"
+    network: "192.168.50.0"
+    pool: "192.168.50.100-192.168.50.199"
+    lease_time: "1d"
+    domain: "iot.home.arpa"
+    tagged: ["bridge", "ether2", "wifi1-iot", "wifi2-iot"]
+    untagged: []
+    comment: "IOT"
+  - key: "guest"
+    id: 60
+    name: "GUEST"
+    interface_list: "GUEST"
+    subnet: "192.168.60.0/24"
+    gateway: "192.168.60.1"
+    network: "192.168.60.0"
+    pool: "192.168.60.100-192.168.60.199"
+    lease_time: "8h"
+    domain: "guest.home.arpa"
+    tagged: ["bridge", "ether2", "wifi1-guest", "wifi2-guest"]
+    untagged: []
+    comment: "GUEST"
+  - key: "storage"
+    id: 70
+    name: "STORAGE"
+    interface_list: "STORAGE"
+    subnet: "192.168.70.0/24"
+    gateway: "192.168.70.1"
+    network: "192.168.70.0"
+    pool: "192.168.70.100-192.168.70.199"
+    lease_time: "1d"
+    domain: "storage.home.arpa"
+    tagged: ["bridge", "ether2"]
+    untagged: []
+    comment: "STORAGE"
+  - key: "dmz"
+    id: 90
+    name: "DMZ"
+    interface_list: "DMZ"
+    subnet: "192.168.90.0/24"
+    gateway: "192.168.90.1"
+    network: "192.168.90.0"
+    pool: "192.168.90.100-192.168.90.199"
+    lease_time: "1d"
+    domain: "dmz.home.arpa"
+    tagged: ["bridge", "ether2"]
+    untagged: []
+    comment: "DMZ"
+
+mikrotik_router_dns_servers:
+  - "192.168.30.10"
+  - "192.168.30.11"
+  - "192.168.20.1"
+
+mikrotik_router_dns_fallback_servers:
+  - "1.1.1.1"
+  - "1.0.0.1"
+  - "8.8.8.8"
+
+mikrotik_router_static_leases:
+  - address: "192.168.20.10"
+    comment: "PROXMOX-MGMT"
+    server: "dhcp-vlan20"
+    disabled: "yes"
+  - address: "192.168.30.10"
+    comment: "TECHNITIUM01-DNS"
+    server: "dhcp-vlan30"
+    disabled: "yes"
+  - address: "192.168.30.11"
+    comment: "TECHNITIUM02-DNS"
+    server: "dhcp-vlan30"
+    disabled: "yes"
+
+mikrotik_router_wifi_channels:
+  - name: "ch-24"
+    band: "2ghz-ax"
+    width: "20mhz"
+    skip_dfs_channels: "all"
+  - name: "ch-5"
+    band: "5ghz-ax"
+    width: "20/40/80mhz"
+    skip_dfs_channels: "10min-cac"
+
+mikrotik_router_wifi_networks:
+  - key: "users"
+    security: "sec-users"
+    ssid: "Mikrotik-Users"
+    auth: "wpa2-psk,wpa3-psk"
+    vlan_id: 40
+    datapath: "dp-users"
+  - key: "mgmt"
+    security: "sec-mgmt"
+    ssid: "Mikrotik-MGMT"
+    auth: "wpa2-psk,wpa3-psk"
+    vlan_id: 20
+    datapath: "dp-mgmt"
+  - key: "iot"
+    security: "sec-iot"
+    ssid: "Mikrotik-IoT"
+    auth: "wpa2-psk"
+    vlan_id: 50
+    datapath: "dp-iot"
+  - key: "guest"
+    security: "sec-guest"
+    ssid: "Mikrotik-Guest"
+    auth: "wpa2-psk"
+    vlan_id: 60
+    datapath: "dp-guest"
+
+mikrotik_router_wifi_radios:
+  - default_name: "wifi1"
+    comment: "5GHz base radio"
+    configuration: "cfg-users-5"
+  - default_name: "wifi2"
+    comment: "2.4GHz base radio"
+    configuration: "cfg-users-24"
+
+mikrotik_router_virtual_wifi:
+  - { name: "wifi1-guest", master: "wifi1", configuration: "cfg-guest-5" }
+  - { name: "wifi1-iot", master: "wifi1", configuration: "cfg-iot-5" }
+  - { name: "wifi1-mgmt", master: "wifi1", configuration: "cfg-mgmt-5" }
+  - { name: "wifi2-guest", master: "wifi2", configuration: "cfg-guest-24" }
+  - { name: "wifi2-iot", master: "wifi2", configuration: "cfg-iot-24" }
+  - { name: "wifi2-mgmt", master: "wifi2", configuration: "cfg-mgmt-24" }
+
+mikrotik_router_rfc1918_networks:
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+
+mikrotik_router_ntp_servers:
+  - "time.cloudflare.com"
+  - "time.google.com"
+
+mikrotik_router_managed_comments:
+  prefix: "HL-"
+
+mikrotik_router_required_secret_keys:
+  - "mikrotik_router_admin_password"
+  - "mikrotik_router_wifi_passphrase_users"
+  - "mikrotik_router_wifi_passphrase_mgmt"
+  - "mikrotik_router_wifi_passphrase_iot"
+  - "mikrotik_router_wifi_passphrase_guest"
