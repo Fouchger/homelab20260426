@@ -17,7 +17,8 @@ silent: true
 
 vars:
   ANSIBLE_CONFIG_FILE: '{{.ROOT_DIR}}/ansible.cfg'
-  ANSIBLE_INVENTORY_FILE: '{{.STATE_DIR}}/ansible/inventory.yml'
+  ANSIBLE_INVENTORY_FILE: '{{.ROOT_DIR}}/state/ansible/inventory.yml'
+  ANSIBLE_PLAYBOOK: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible-playbook'
   MIKROTIK_OUTPUT_ROOT: '{{.STATE_DIR}}/mikrotik/generated'
   MIKROTIK_BACKUP_ROOT: '{{.STATE_DIR}}/mikrotik'
   MIKROTIK_DEFAULT_NAME: '{{default "hap-ax2" .MIKROTIK_NAME}}'
@@ -46,11 +47,16 @@ tasks:
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
         print_section_header "Prepare Ansible dependencies, MikroTik connection values, SSH access, and inventory" "PEACH"    
-      - task: :ansible:bootstrap
+      - task: prepare
+
+  prepare:
+    desc: Prepare MikroTik connection, secrets, SSH access, and generated inventory
+    run: once
+    cmds:
       - task: connection:ensure
       - task: secrets:ensure
-      - task: ssh-copy-id
       - task: :ansible:inventory:render
+      - task: ssh-copy-id
 
   connection:ensure:
     desc: Ensure MikroTik connection values exist in state/config/.env
@@ -324,7 +330,9 @@ tasks:
   backup:run:
     internal: true
     desc: Run MikroTik backup without regenerating inventory
-    deps: [secrets:ensure]
+    deps:
+      - secrets:ensure
+      - :ansible:tools:check
     cmds:
       - |
         # =============================================================================
@@ -346,7 +354,7 @@ tasks:
         ANSIBLE_HOST_KEY_CHECKING='{{.MIKROTIK_HOST_KEY_CHECKING}}' \
         MIKROTIK_BACKUP_ROOT='{{.MIKROTIK_BACKUP_ROOT}}' \
         MIKROTIK_BACKUP_STAMP="$backup_stamp" \
-          ansible-playbook \
+          '{{.ANSIBLE_PLAYBOOK}}' \
             -i '{{.ANSIBLE_INVENTORY_FILE}}' \
             '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_backup.yml'
 
@@ -365,7 +373,9 @@ tasks:
   render:run:
     internal: true
     desc: Render MikroTik desired state without regenerating inventory
-    deps: [secrets:ensure]
+    deps:
+      - secrets:ensure
+      - :ansible:tools:check
     cmds:
       - |
         # =============================================================================
@@ -385,7 +395,7 @@ tasks:
         chmod 700 "$output_dir"
         ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
         MIKROTIK_OUTPUT_DIR="$output_dir" \
-          ansible-playbook \
+          '{{.ANSIBLE_PLAYBOOK}}' \
             -i '{{.ANSIBLE_INVENTORY_FILE}}' \
             '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_render.yml'
 
@@ -404,7 +414,9 @@ tasks:
   plan:run:
     internal: true
     desc: Run MikroTik plan without regenerating inventory
-    deps: [secrets:ensure]
+    deps:
+      - secrets:ensure
+      - :ansible:tools:check
     cmds:
       - |
         # =============================================================================
@@ -425,7 +437,7 @@ tasks:
         ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
         ANSIBLE_HOST_KEY_CHECKING='{{.MIKROTIK_HOST_KEY_CHECKING}}' \
         MIKROTIK_OUTPUT_DIR="$output_dir" \
-          ansible-playbook \
+          '{{.ANSIBLE_PLAYBOOK}}' \
             -i '{{.ANSIBLE_INVENTORY_FILE}}' \
             '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_plan.yml'
 
@@ -438,7 +450,9 @@ tasks:
   apply:run:
     internal: true
     desc: Apply MikroTik desired state without regenerating inventory
-    deps: [secrets:ensure]
+    deps:
+      - secrets:ensure
+      - :ansible:tools:check
     cmds:
       - |
         # =============================================================================
@@ -459,6 +473,6 @@ tasks:
         ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
         ANSIBLE_HOST_KEY_CHECKING='{{.MIKROTIK_HOST_KEY_CHECKING}}' \
         MIKROTIK_OUTPUT_DIR="$output_dir" \
-          ansible-playbook \
+          '{{.ANSIBLE_PLAYBOOK}}' \
             -i '{{.ANSIBLE_INVENTORY_FILE}}' \
             '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_apply.yml'

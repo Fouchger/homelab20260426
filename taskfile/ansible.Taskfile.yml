@@ -3,11 +3,12 @@
 # =============================================================================
 # File: taskfile/ansible.Taskfile.yml
 # Purpose:
-#   Install and maintain the Ansible runtime for homelab automation.
+#   Install and maintain the controlled Ansible runtime for homelab automation.
 # Notes:
-#   - Installs Ansible and ansible-galaxy on Debian/Ubuntu systems.
-#   - Installs required Galaxy collections from ansible/collections/requirements.yml.
-#   - Generates state/ansible/inventory.yml from values loaded from state/config/.env.
+#   - OS packages are limited to stable control-node prerequisites.
+#   - Ansible, Paramiko, and ansible-pylibssh are installed inside a dedicated
+#     virtual environment under state/venv/ansible.
+#   - Playbooks are always executed from that virtual environment.
 # =============================================================================
 
 version: '3'
@@ -17,7 +18,11 @@ silent: true
 vars:
   ANSIBLE_CONFIG_FILE: '{{.ROOT_DIR}}/ansible.cfg'
   ANSIBLE_COLLECTION_REQUIREMENTS_FILE: '{{.ROOT_DIR}}/ansible/collections/requirements.yml'
-  ANSIBLE_INVENTORY_FILE: '{{.STATE_DIR}}/ansible/inventory.yml'
+  ANSIBLE_INVENTORY_FILE: '{{.ROOT_DIR}}/state/ansible/inventory.yml'
+  ANSIBLE_VENV_DIR: '{{.ROOT_DIR}}/state/venv/ansible'
+  ANSIBLE_PLAYBOOK: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible-playbook'
+  ANSIBLE_GALAXY: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible-galaxy'
+  ANSIBLE_PYTHON: '{{.ROOT_DIR}}/state/venv/ansible/bin/python'
 
 tasks:
   default:
@@ -39,7 +44,7 @@ tasks:
         set -euo pipefail
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
-        print_section_header "Install Ansible and required Galaxy collections" "PEACH"    
+        print_section_header "Install Ansible and required Galaxy collections" "PEACH"
       - task: tools:install
       - task: collections:install
 
@@ -59,70 +64,81 @@ tasks:
         esac
 
   tools:install:
-    desc: Install Ansible, ansible-galaxy, and supporting tools
+    desc: Install Ansible and SSH Python backends in a controlled virtual environment
     deps: [tools:check:apt]
     cmds:
       - |
         # =============================================================================
         # Task: tools:install
         # Purpose:
-        #   Install the local Ansible control-node tooling.
+        #   Install OS prerequisites, then create a dedicated Ansible Python virtual
+        #   environment so Paramiko and ansible-pylibssh are not mixed with system Python.
         # =============================================================================
         set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          ansible \
-          ansible-core \
           ca-certificates \
           openssh-client \
           python3 \
           python3-pip \
-          python3-paramiko \
+          python3-venv \
           sshpass
 
-        if apt-cache show python3-ansible-pylibssh >/dev/null 2>&1; then
-          sudo apt-get install -y --no-install-recommends python3-ansible-pylibssh
+        mkdir -p '{{.ROOT_DIR}}/state/venv'
+        chmod 700 '{{.ROOT_DIR}}/state/venv'
+
+        if [ ! -x '{{.ANSIBLE_PYTHON}}' ]; then
+          python3 -m venv '{{.ANSIBLE_VENV_DIR}}'
         fi
 
-        python3 -m pip install --break-system-packages --upgrade \
+        '{{.ANSIBLE_PYTHON}}' -m pip install --upgrade pip wheel
+        '{{.ANSIBLE_PYTHON}}' -m pip install --upgrade \
+          ansible \
           ansible-pylibssh \
           paramiko
       - task: tools:check
 
   tools:check:
-    desc: Validate Ansible CLI tooling
+    desc: Validate Ansible virtual environment tooling
     cmds:
       - |
         set -euo pipefail
         missing=0
-        for tool in ansible ansible-playbook ansible-galaxy ssh ssh-copy-id ssh-keyscan sshpass python3; do
+        for tool in ssh ssh-copy-id ssh-keyscan sshpass python3; do
           if ! command -v "$tool" >/dev/null 2>&1; then
             echo "Missing required tool: $tool" >&2
             missing=1
           fi
         done
 
-        if ! python3 - <<'PYTHON_CHECK'
+        for tool in '{{.ANSIBLE_PLAYBOOK}}' '{{.ANSIBLE_GALAXY}}' '{{.ANSIBLE_PYTHON}}'; do
+          if [ ! -x "$tool" ]; then
+            echo "Missing Ansible virtualenv executable: $tool" >&2
+            missing=1
+          fi
+        done
+
+        if [ -x '{{.ANSIBLE_PYTHON}}' ] && ! '{{.ANSIBLE_PYTHON}}' - <<'PYTHON_CHECK'
         import importlib.metadata
         import importlib.util
         import sys
 
-        if importlib.util.find_spec("paramiko") is None:
-            print("Missing required Python module: paramiko", file=sys.stderr)
-            sys.exit(1)
+        for module in ("ansible", "paramiko"):
+            if importlib.util.find_spec(module) is None:
+                print(f"Missing required Python module in Ansible virtualenv: {module}", file=sys.stderr)
+                sys.exit(1)
 
         try:
             importlib.metadata.version("ansible-pylibssh")
         except importlib.metadata.PackageNotFoundError:
-            if importlib.util.find_spec("ansible_pylibssh") is None:
-                print("Missing required Python package: ansible-pylibssh", file=sys.stderr)
-                sys.exit(1)
+            print("Missing required Python package in Ansible virtualenv: ansible-pylibssh", file=sys.stderr)
+            sys.exit(1)
         PYTHON_CHECK
         then
           missing=1
         fi
         [ "$missing" -eq 0 ]
-        echo 'Ansible tooling check completed successfully.'
+        echo 'Ansible virtualenv tooling check completed successfully.'
 
   collections:install:
     desc: Install Ansible Galaxy collection requirements
@@ -136,7 +152,7 @@ tasks:
         # =============================================================================
         set -euo pipefail
         ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
-          ansible-galaxy collection install \
+          '{{.ANSIBLE_GALAXY}}' collection install \
             -r '{{.ANSIBLE_COLLECTION_REQUIREMENTS_FILE}}' \
             -p '{{.ROOT_DIR}}/ansible/collections'
 
@@ -151,13 +167,13 @@ tasks:
         #   Generate the runtime Ansible inventory using an Ansible localhost playbook.
         # =============================================================================
         set -euo pipefail
-        mkdir -p '{{.STATE_DIR}}/ansible'
-        chmod 700 '{{.STATE_DIR}}/ansible'
+        mkdir -p '{{.ROOT_DIR}}/state/ansible'
+        chmod 700 '{{.ROOT_DIR}}/state/ansible'
         ROOT_DIR='{{.ROOT_DIR}}' \
-        STATE_DIR='{{.STATE_DIR}}' \
+        STATE_DIR='{{.ROOT_DIR}}/state' \
         SSH_KEY_PATH='{{.SSH_KEY_PATH}}' \
         ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
-          ansible-playbook \
+          '{{.ANSIBLE_PLAYBOOK}}' \
             -i 'localhost,' \
             -c local \
             '{{.ROOT_DIR}}/ansible/playbooks/mikrotik_inventory.yml'

@@ -80,7 +80,7 @@ tasks:
       - task --taskfile "{{.TASKFILE}}" --list
 
   homelab:setup:
-    desc: Task to setup and configure complete homelab in in step.  
+    desc: Set up the complete homelab control plane, then back up and plan MikroTik changes
     cmds:
       - |
         bash ./scripts/lib/ensure-executable-scripts.sh
@@ -98,7 +98,6 @@ tasks:
       - task: ansible:inventory:render
       - task: mikrotik:ssh-copy-id
       - task: mikrotik:backup:run
-      - task: mikrotik:render:run
       - task: mikrotik:plan:run
 
 

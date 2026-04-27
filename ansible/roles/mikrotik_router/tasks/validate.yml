@@ -20,4 +20,5 @@
       - lookup('vars', item, default='') != 'CHANGE_ME'
     fail_msg: "Required MikroTik secret is missing or still CHANGE_ME: {{ item }}"
   loop: "{{ mikrotik_router_required_secret_keys }}"
-  no_log: true
+  loop_control:
+    label: "{{ item }}"
