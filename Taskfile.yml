@@ -45,11 +45,23 @@ vars:
   SSH_CONNECT_TIMEOUT: '{{default "5" .SSH_CONNECT_TIMEOUT}}'
   NONINTERACTIVE: '{{default "0" .NONINTERACTIVE}}'
 
+  # Shared Proxmox automation variables
+  PVE_REALM: '{{default "pam" .PVE_REALM}}'
+  PVE_AUTOMATION_USER: '{{default "automation" .PVE_AUTOMATION_USER}}'
+  PVE_AUTOMATION_ROLE: '{{default "AutomationRole" .PVE_AUTOMATION_ROLE}}'
+  PVE_AUTOMATION_TOKEN_ID: '{{default "automation-token" .PVE_AUTOMATION_TOKEN_ID}}'
+  PVE_AUTOMATION_PRIVS: '{{default "Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,VM.Allocate,VM.Audit,VM.Clone,VM.Console,VM.Config.CDROM,VM.Config.Cloudinit,VM.Config.CPU,VM.Config.Disk,VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt" .PVE_AUTOMATION_PRIVS}}'
+  PROXMOX_TEMPLATE_DATASTORE: '{{default "local" .PROXMOX_TEMPLATE_DATASTORE}}'
+  PROXMOX_VM_DATASTORE: '{{default "local-lvm" .PROXMOX_VM_DATASTORE}}'
+  PROXMOX_SNIPPETS_DATASTORE: '{{default "local" .PROXMOX_SNIPPETS_DATASTORE}}'
+  PROXMOX_INSECURE_TLS: '{{default "true" .PROXMOX_INSECURE_TLS}}'
+
 
 
 includes:
   git_github: ./taskfile/git_github.Taskfile.yml
   ssh: ./taskfile/ssh.Taskfile.yml
+  proxmox: ./taskfile/proxmox.Taskfile.yml
   proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
   secrets_age: ./taskfile/secrets_sops_age.Taskfile.yml
   secrets_openbao: ./taskfile/secrets_openbao.Taskfile.yml
@@ -77,6 +89,7 @@ tasks:
       - task: git_github:bootstrap
       - task: secrets_openbao:prepare
       - task: ssh:bootstrap
+      - task: proxmox:bootstrap
 
 
   
