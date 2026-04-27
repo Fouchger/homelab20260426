@@ -33,12 +33,23 @@ vars:
   PASSWORDS_EXAMPLE_ENV_FILE: '{{.PASSWORDS_DIR}}/passwords.example.env'
   PASSWORDS_RUNTIME_ENV_FILE: '{{.PASSWORDS_DIR}}/.runtime.env'
   SOPS_CONFIG_FILE: '{{.ROOT_DIR}}/.sops.yaml'
+
+  # Shared SSH variables
+  SSH_KEY_DIR: '{{default (printf "%s/.ssh" .HOME) .SSH_KEY_DIR}}'
+  SSH_KEY_NAME: '{{default "homelab_ed25519" .SSH_KEY_NAME}}'
+  SSH_KEY_PATH: '{{default (printf "%s/%s" .SSH_KEY_DIR .SSH_KEY_NAME) .SSH_KEY_PATH}}'
+  SSH_KNOWN_HOSTS_FILE: '{{default (printf "%s/known_hosts" .SSH_KEY_DIR) .SSH_KNOWN_HOSTS_FILE}}'
+  PROXMOX_SSH_HOST: '{{default "" .PROXMOX_SSH_HOST}}'
+  PROXMOX_SSH_PORT: '{{default "22" .PROXMOX_SSH_PORT}}'
+  PROXMOX_SSH_USER: '{{default "root" .PROXMOX_SSH_USER}}'
+  SSH_CONNECT_TIMEOUT: '{{default "5" .SSH_CONNECT_TIMEOUT}}'
   NONINTERACTIVE: '{{default "0" .NONINTERACTIVE}}'
 
 
 
 includes:
   git_github: ./taskfile/git_github.Taskfile.yml
+  ssh: ./taskfile/ssh.Taskfile.yml
   proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
   secrets_age: ./taskfile/secrets_sops_age.Taskfile.yml
   secrets_openbao: ./taskfile/secrets_openbao.Taskfile.yml
@@ -65,6 +76,7 @@ tasks:
       - task: secrets_age:prepare
       - task: git_github:bootstrap
       - task: secrets_openbao:prepare
+      - task: ssh:bootstrap
 
 
   

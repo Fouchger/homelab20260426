@@ -1,0 +1,635 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/ssh.Taskfile.yml
+# Purpose:
+#   Manage OpenSSH client tooling, local SSH identity creation, Proxmox
+#   key-based authentication bootstrap, and safe known_hosts maintenance.
+#
+# Notes:
+#   - Shared variables are supplied by the root Taskfile.
+#   - Non-secret Proxmox connection values are stored in state/config/.env.
+#   - SSH private keys remain outside the repository under SSH_KEY_DIR.
+#   - Passwords and private keys are never written to this repository.
+#   - Cleanup targets known_hosts entries only.
+# =============================================================================
+
+version: '3'
+
+silent: true
+
+tasks:
+  default:
+    desc: Show available SSH tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show available SSH tasks
+    cmds:
+      - task --taskfile '{{.TASKFILE}}' --list
+
+  bootstrap:
+    desc: Run the recommended first-time SSH bootstrap flow for Proxmox access
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Prepare SSH access for Proxmox" "PEACH"
+      - task: proxmox:connection:ensure
+      - task: generate
+      - task: known-hosts:trust:proxmox
+      - task: key:add:proxmox
+      - task: report
+      - |
+        # =============================================================================
+        # Task: bootstrap
+        # Purpose:
+        #   Confirm the local SSH identity, trust the Proxmox host key, and ensure
+        #   passwordless SSH access to the configured Proxmox host.
+        # =============================================================================
+        set -euo pipefail
+        cat <<'EOF2'
+        SSH bootstrap complete.
+
+        The local SSH key is ready, the Proxmox host key is trusted, and
+        passwordless SSH access has been ensured for the Proxmox host.
+        EOF2
+
+  init:
+    internal: true
+    desc: Create standard SSH and local configuration paths
+    cmds:
+      - |
+        # =============================================================================
+        # Task: init
+        # Purpose:
+        #   Ensure SSH and repository-side configuration paths exist.
+        # =============================================================================
+        set -euo pipefail
+        mkdir -p \
+          '{{.SSH_KEY_DIR}}' \
+          '{{.CONFIG_DIR}}' \
+          '{{.TMP_DIR}}'
+        chmod 700 \
+          '{{.SSH_KEY_DIR}}' \
+          '{{.CONFIG_DIR}}' \
+          '{{.TMP_DIR}}'
+        touch '{{.CONFIG_ENV_FILE}}'
+        chmod 600 '{{.CONFIG_ENV_FILE}}'
+        if [ ! -f '{{.SSH_KNOWN_HOSTS_FILE}}' ]; then
+          touch '{{.SSH_KNOWN_HOSTS_FILE}}'
+          chmod 600 '{{.SSH_KNOWN_HOSTS_FILE}}'
+        fi
+
+  tools:check:apt:
+    internal: true
+    desc: Ensure Debian or Ubuntu package tooling is available
+    cmds:
+      - |
+        set -euo pipefail
+        command -v apt-get >/dev/null 2>&1
+        command -v dpkg >/dev/null 2>&1
+        [ -r /etc/os-release ]
+        os_id="$(. /etc/os-release && printf '%s' "$ID")"
+        case "$os_id" in
+          ubuntu|debian) ;;
+          *) echo "Unsupported distribution: ${os_id}. Only Ubuntu and Debian are supported." >&2; exit 1 ;;
+        esac
+
+  tools:install:
+    desc: Install OpenSSH client tooling
+    deps: [tools:check:apt]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: tools:install
+        # Purpose:
+        #   Install OpenSSH client tools required by SSH bootstrap tasks.
+        # =============================================================================
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends openssh-client ca-certificates sed gawk
+      - task: tools:check
+
+  tools:check:
+    desc: Validate required OpenSSH client tooling
+    cmds:
+      - |
+        set -euo pipefail
+        missing=0
+        for tool in ssh ssh-keygen ssh-keyscan ssh-copy-id awk sed; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "Missing required tool: $tool" >&2
+            missing=1
+          fi
+        done
+        [ "$missing" -eq 0 ]
+        echo 'OpenSSH client tooling check completed successfully.'
+
+  proxmox:connection:ensure:
+    internal: true
+    desc: Ensure Proxmox SSH connection values exist in state/config/.env
+    deps: [init]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: proxmox:connection:ensure
+        # Purpose:
+        #   Resolve and persist standard Proxmox SSH connection values.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        upsert_env_value() {
+          env_key="$1"
+          env_value="$2"
+          temp_file="$(mktemp '{{.TMP_DIR}}/config-env.XXXXXX')"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 != key' '{{.CONFIG_ENV_FILE}}' > "$temp_file"
+          fi
+          printf '%s=%s\n' "$env_key" "$env_value" >> "$temp_file"
+          mv "$temp_file" '{{.CONFIG_ENV_FILE}}'
+          chmod 600 '{{.CONFIG_ENV_FILE}}'
+        }
+
+        prompt_value() {
+          prompt_text="$1"
+          default_value="$2"
+          if [ -n "$default_value" ]; then
+            printf '%s' "$default_value"
+            return 0
+          fi
+          if [ '{{.NONINTERACTIVE}}' = '1' ]; then
+            printf '%s' "$default_value"
+            return 0
+          fi
+          printf '%s' "$prompt_text" > /dev/tty
+          IFS= read -r value < /dev/tty
+          printf '%s' "$value"
+        }
+
+        proxmox_ssh_host="${PROXMOX_SSH_HOST:-$(get_env_value PROXMOX_SSH_HOST)}"
+        proxmox_ssh_port="${PROXMOX_SSH_PORT:-$(get_env_value PROXMOX_SSH_PORT)}"
+        proxmox_ssh_user="${PROXMOX_SSH_USER:-$(get_env_value PROXMOX_SSH_USER)}"
+        ssh_connect_timeout="${SSH_CONNECT_TIMEOUT:-$(get_env_value SSH_CONNECT_TIMEOUT)}"
+
+        proxmox_ssh_host="$(prompt_value 'Proxmox SSH host or IP address: ' "$proxmox_ssh_host")"
+        proxmox_ssh_port="${proxmox_ssh_port:-22}"
+        proxmox_ssh_user="${proxmox_ssh_user:-root}"
+        ssh_connect_timeout="${ssh_connect_timeout:-5}"
+
+        [ -n "$proxmox_ssh_host" ] || { echo 'PROXMOX_SSH_HOST is required.' >&2; exit 1; }
+
+        upsert_env_value PROXMOX_SSH_HOST "$proxmox_ssh_host"
+        upsert_env_value PROXMOX_SSH_PORT "$proxmox_ssh_port"
+        upsert_env_value PROXMOX_SSH_USER "$proxmox_ssh_user"
+        upsert_env_value SSH_CONNECT_TIMEOUT "$ssh_connect_timeout"
+
+  generate:
+    desc: Generate an Ed25519 SSH keypair if it does not already exist
+    deps: [init]
+    status:
+      - test -f '{{.SSH_KEY_PATH}}'
+    cmds:
+      - |
+        # =============================================================================
+        # Task: generate
+        # Purpose:
+        #   Generate the local Ed25519 SSH identity using the configured Git email
+        #   where available.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        operator_email="${GIT_USER_EMAIL:-$(get_env_value GIT_USER_EMAIL)}"
+        operator_email="${operator_email:-homelab@example.invalid}"
+
+        ssh-keygen -t ed25519 -C "$operator_email" -f '{{.SSH_KEY_PATH}}' -N ''
+        chmod 600 '{{.SSH_KEY_PATH}}'
+        chmod 644 '{{.SSH_KEY_PATH}}.pub'
+
+  show-public:
+    desc: Display the public key for copying to GitHub, GitLab, or Proxmox
+    deps: [generate]
+    cmds:
+      - cat '{{.SSH_KEY_PATH}}.pub'
+
+  known-hosts:trust:proxmox:
+    desc: Scan, fingerprint, confirm, and trust the Proxmox SSH host key
+    deps: [proxmox:connection:ensure, tools:check]
+    cmds:
+      - rm -f '{{.TMP_DIR}}/proxmox-hostkey-scan.tmp'
+      - defer: rm -f '{{.TMP_DIR}}/proxmox-hostkey-scan.tmp'
+      - |
+        # =============================================================================
+        # Task: known-hosts:trust:proxmox
+        # Purpose:
+        #   Scan the Proxmox SSH host key, display its fingerprint, and require
+        #   explicit operator confirmation before first trust.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        proxmox_ssh_host="$(get_env_value PROXMOX_SSH_HOST)"
+        proxmox_ssh_port="$(get_env_value PROXMOX_SSH_PORT)"
+        proxmox_ssh_user="$(get_env_value PROXMOX_SSH_USER)"
+        ssh_connect_timeout="$(get_env_value SSH_CONNECT_TIMEOUT)"
+        proxmox_ssh_port="${proxmox_ssh_port:-22}"
+        proxmox_ssh_user="${proxmox_ssh_user:-root}"
+        ssh_connect_timeout="${ssh_connect_timeout:-5}"
+        scan_file='{{.TMP_DIR}}/proxmox-hostkey-scan.tmp'
+
+        [ -n "$proxmox_ssh_host" ] || { echo 'PROXMOX_SSH_HOST is not configured.' >&2; exit 1; }
+
+        known_hosts_target="$proxmox_ssh_host"
+        if [ "$proxmox_ssh_port" != '22' ]; then
+          known_hosts_target="[$proxmox_ssh_host]:$proxmox_ssh_port"
+        fi
+
+        if ssh-keygen -F "$known_hosts_target" -f '{{.SSH_KNOWN_HOSTS_FILE}}' >/dev/null 2>&1; then
+          echo "Proxmox SSH host key is already trusted for $known_hosts_target."
+          exit 0
+        fi
+
+        if ! ssh-keyscan -T "$ssh_connect_timeout" -p "$proxmox_ssh_port" "$proxmox_ssh_host" > "$scan_file" 2>/dev/null; then
+          echo 'Failed to scan the Proxmox SSH host key.' >&2
+          exit 1
+        fi
+
+        [ -s "$scan_file" ] || { echo 'No SSH host key was returned by the Proxmox host.' >&2; exit 1; }
+
+        echo
+        echo '--- Proxmox SSH host key scan ---'
+        echo "Host:    $proxmox_ssh_host"
+        echo "Port:    $proxmox_ssh_port"
+        echo "User:    $proxmox_ssh_user"
+        echo
+        ssh-keygen -lf "$scan_file" || true
+        echo
+
+        if [ '{{.NONINTERACTIVE}}' != '1' ]; then
+          printf 'Trust this host key and add it to known_hosts? [y/N]: ' > /dev/tty
+          IFS= read -r confirm < /dev/tty
+          case "$confirm" in
+            y|Y|yes|YES) ;;
+            *) echo 'Host key trust was not confirmed.' >&2; exit 1 ;;
+          esac
+        fi
+
+        cat "$scan_file" >> '{{.SSH_KNOWN_HOSTS_FILE}}'
+        chmod 600 '{{.SSH_KNOWN_HOSTS_FILE}}'
+        echo "Trusted Proxmox SSH host key for $known_hosts_target."
+
+  key:add:proxmox:
+    desc: Add the local public key to the Proxmox host authorised_keys
+    deps: [generate, proxmox:connection:ensure, known-hosts:trust:proxmox, tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: key:add:proxmox
+        # Purpose:
+        #   Add the local public key to Proxmox authorised_keys so future SSH access
+        #   does not require a password.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        proxmox_ssh_host="$(get_env_value PROXMOX_SSH_HOST)"
+        proxmox_ssh_port="$(get_env_value PROXMOX_SSH_PORT)"
+        proxmox_ssh_user="$(get_env_value PROXMOX_SSH_USER)"
+        ssh_connect_timeout="$(get_env_value SSH_CONNECT_TIMEOUT)"
+        proxmox_ssh_port="${proxmox_ssh_port:-22}"
+        proxmox_ssh_user="${proxmox_ssh_user:-root}"
+        ssh_connect_timeout="${ssh_connect_timeout:-5}"
+        output_file='{{.TMP_DIR}}/ssh-copy-id-proxmox.out'
+
+        [ -n "$proxmox_ssh_host" ] || { echo 'PROXMOX_SSH_HOST is not configured.' >&2; exit 1; }
+        [ -f '{{.SSH_KEY_PATH}}.pub' ] || { echo 'Public key not found. Run task ssh:generate first.' >&2; exit 1; }
+
+        echo
+        echo '--- Proxmox SSH key installation ---'
+        echo "Host:    $proxmox_ssh_host"
+        echo "Port:    $proxmox_ssh_port"
+        echo "User:    $proxmox_ssh_user"
+        echo "Key:     {{.SSH_KEY_PATH}}.pub"
+        echo "Timeout: ${ssh_connect_timeout}s"
+        echo
+
+        rm -f "$output_file"
+        if ! ssh-copy-id \
+          -i '{{.SSH_KEY_PATH}}.pub' \
+          -p "$proxmox_ssh_port" \
+          -o ConnectTimeout="$ssh_connect_timeout" \
+          -o StrictHostKeyChecking=yes \
+          "$proxmox_ssh_user@$proxmox_ssh_host" \
+          > "$output_file" 2>&1; then
+          cat "$output_file" >&2
+          rm -f "$output_file"
+          exit 1
+        fi
+
+        cat "$output_file"
+        if grep -Fq 'All keys were skipped because they already exist on the remote system.' "$output_file"; then
+          echo
+          echo "Public key already present on $proxmox_ssh_user@$proxmox_ssh_host."
+        else
+          echo
+          echo "Public key added to $proxmox_ssh_user@$proxmox_ssh_host."
+        fi
+        rm -f "$output_file"
+
+  known-hosts:reconcile:
+    desc: Reconcile plain-text known_hosts entries and remove stale host keys
+    deps: [init, tools:check]
+    cmds:
+      - rm -f '{{.TMP_DIR}}/known-hosts-reconcile.tmp' '{{.TMP_DIR}}/known-hosts-reconcile.new'
+      - defer: rm -f '{{.TMP_DIR}}/known-hosts-reconcile.tmp' '{{.TMP_DIR}}/known-hosts-reconcile.new'
+      - |
+        # =============================================================================
+        # Task: known-hosts:reconcile
+        # Purpose:
+        #   Validate each plain-text known_hosts entry and remove entries that no
+        #   longer answer on the expected port or no longer present the same host key.
+        # =============================================================================
+        set -euo pipefail
+
+        known_hosts_file='{{.SSH_KNOWN_HOSTS_FILE}}'
+        new_file='{{.TMP_DIR}}/known-hosts-reconcile.new'
+        scan_file='{{.TMP_DIR}}/known-hosts-reconcile.tmp'
+        default_timeout='{{.SSH_CONNECT_TIMEOUT}}'
+        default_timeout="${default_timeout:-5}"
+
+        if [ ! -f "$known_hosts_file" ]; then
+          echo 'known_hosts file does not exist. Nothing to reconcile.'
+          exit 0
+        fi
+
+        : > "$new_file"
+        chmod 600 "$new_file"
+
+        backup_file="${known_hosts_file}.bak.$(date +%Y%m%d%H%M%S)"
+        cp "$known_hosts_file" "$backup_file"
+        chmod 600 "$backup_file"
+
+        echo "Backup created: $backup_file"
+        echo
+
+        kept_count=0
+        removed_count=0
+        preserved_count=0
+
+        while IFS= read -r line || [ -n "$line" ]; do
+          if [ -z "$line" ]; then
+            printf '\n' >> "$new_file"
+            preserved_count=$((preserved_count + 1))
+            continue
+          fi
+
+          case "$line" in
+            \#*|@*|\|1\|*)
+              printf '%s\n' "$line" >> "$new_file"
+              preserved_count=$((preserved_count + 1))
+              continue
+              ;;
+          esac
+
+          set -- $line
+          if [ "$#" -lt 3 ]; then
+            printf '%s\n' "$line" >> "$new_file"
+            preserved_count=$((preserved_count + 1))
+            continue
+          fi
+
+          host_field="$1"
+          key_type="$2"
+          key_value="$3"
+          host_candidate="$host_field"
+          port_candidate='22'
+
+          case "$host_field" in
+            *,*)
+              printf '%s\n' "$line" >> "$new_file"
+              preserved_count=$((preserved_count + 1))
+              continue
+              ;;
+            \[*\]:*)
+              host_candidate="${host_field#\[}"
+              host_candidate="${host_candidate%%]*}"
+              port_candidate="${host_field##*:}"
+              ;;
+          esac
+
+          if [ -z "$host_candidate" ]; then
+            echo "Preserving unparseable entry: $host_field"
+            printf '%s\n' "$line" >> "$new_file"
+            preserved_count=$((preserved_count + 1))
+            continue
+          fi
+
+          : > "$scan_file"
+          if ! ssh-keyscan -T "$default_timeout" -p "$port_candidate" -t "$key_type" "$host_candidate" > "$scan_file" 2>/dev/null; then
+            echo "Removing stale entry (unreachable): $host_field"
+            removed_count=$((removed_count + 1))
+            continue
+          fi
+
+          if [ ! -s "$scan_file" ]; then
+            echo "Removing stale entry (no key returned): $host_field"
+            removed_count=$((removed_count + 1))
+            continue
+          fi
+
+          scanned_match='false'
+          while IFS= read -r scanned_line || [ -n "$scanned_line" ]; do
+            set -- $scanned_line
+            if [ "$#" -lt 3 ]; then
+              continue
+            fi
+            scanned_key_type="$2"
+            scanned_key_value="$3"
+            if [ "$scanned_key_type" = "$key_type" ] && [ "$scanned_key_value" = "$key_value" ]; then
+              scanned_match='true'
+              break
+            fi
+          done < "$scan_file"
+
+          if [ "$scanned_match" = 'true' ]; then
+            printf '%s\n' "$line" >> "$new_file"
+            kept_count=$((kept_count + 1))
+          else
+            echo "Removing stale entry (host key changed): $host_field"
+            removed_count=$((removed_count + 1))
+          fi
+        done < "$known_hosts_file"
+
+        mv "$new_file" "$known_hosts_file"
+        chmod 600 "$known_hosts_file"
+
+        echo
+        echo 'known_hosts reconciliation complete.'
+        echo "Kept validated entries: $kept_count"
+        echo "Removed stale entries:  $removed_count"
+        echo "Preserved entries:      $preserved_count"
+
+  known-hosts:reconcile:proxmox:
+    desc: Remove stale known_hosts entries for the configured Proxmox host
+    deps: [proxmox:connection:ensure]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: known-hosts:reconcile:proxmox
+        # Purpose:
+        #   Remove existing known_hosts entries for the configured Proxmox host so
+        #   trust can be re-established deliberately.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        proxmox_ssh_host="$(get_env_value PROXMOX_SSH_HOST)"
+        proxmox_ssh_port="$(get_env_value PROXMOX_SSH_PORT)"
+        proxmox_ssh_port="${proxmox_ssh_port:-22}"
+        [ -n "$proxmox_ssh_host" ] || { echo 'PROXMOX_SSH_HOST is not configured.' >&2; exit 1; }
+
+        known_hosts_target="$proxmox_ssh_host"
+        if [ "$proxmox_ssh_port" != '22' ]; then
+          known_hosts_target="[$proxmox_ssh_host]:$proxmox_ssh_port"
+        fi
+
+        ssh-keygen -R "$known_hosts_target" -f '{{.SSH_KNOWN_HOSTS_FILE}}' >/dev/null 2>&1 || true
+        echo "Removed known_hosts entries for $known_hosts_target where present."
+
+  delete-identity:
+    desc: Delete the configured local SSH identity after explicit confirmation
+    deps: [init]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: delete-identity
+        # Purpose:
+        #   Remove the configured local SSH private and public key files.
+        # =============================================================================
+        set -euo pipefail
+        if [ '{{.NONINTERACTIVE}}' != '1' ]; then
+          echo "This will delete {{.SSH_KEY_PATH}} and {{.SSH_KEY_PATH}}.pub."
+          printf 'Continue? [y/N]: ' > /dev/tty
+          IFS= read -r confirm < /dev/tty
+          case "$confirm" in
+            y|Y|yes|YES) ;;
+            *) echo 'Cancelled.'; exit 0 ;;
+          esac
+        fi
+        rm -f '{{.SSH_KEY_PATH}}' '{{.SSH_KEY_PATH}}.pub'
+        echo 'Configured SSH identity deleted.'
+
+  report:
+    desc: Show the current local SSH key, known_hosts, and Proxmox connection summary
+    deps: [init]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: report
+        # Purpose:
+        #   Show the current SSH identity, known_hosts, and Proxmox connection summary.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        proxmox_ssh_host="$(get_env_value PROXMOX_SSH_HOST)"
+        proxmox_ssh_port="$(get_env_value PROXMOX_SSH_PORT)"
+        proxmox_ssh_user="$(get_env_value PROXMOX_SSH_USER)"
+        ssh_connect_timeout="$(get_env_value SSH_CONNECT_TIMEOUT)"
+        proxmox_repo_dir="$(get_env_value PROXMOX_REPO_DIR)"
+        proxmox_ssh_port="${proxmox_ssh_port:-22}"
+        proxmox_ssh_user="${proxmox_ssh_user:-root}"
+        ssh_connect_timeout="${ssh_connect_timeout:-5}"
+
+        echo
+        echo '--- SSH report ---'
+        echo "SSH key directory:     {{.SSH_KEY_DIR}}"
+        echo "Private key path:      {{.SSH_KEY_PATH}}"
+        echo "Public key path:       {{.SSH_KEY_PATH}}.pub"
+        echo "known_hosts path:      {{.SSH_KNOWN_HOSTS_FILE}}"
+        echo "Config env file:       {{.CONFIG_ENV_FILE}}"
+        echo
+
+        if [ -f '{{.SSH_KEY_PATH}}' ]; then
+          echo 'Private key:           present'
+        else
+          echo 'Private key:           missing'
+        fi
+
+        if [ -f '{{.SSH_KEY_PATH}}.pub' ]; then
+          echo 'Public key:            present'
+        else
+          echo 'Public key:            missing'
+        fi
+
+        if [ -f '{{.SSH_KNOWN_HOSTS_FILE}}' ]; then
+          known_hosts_line_count="$(wc -l < '{{.SSH_KNOWN_HOSTS_FILE}}' | tr -d ' ')"
+          echo "known_hosts entries:   $known_hosts_line_count"
+        else
+          echo 'known_hosts entries:   file missing'
+        fi
+
+        echo
+        echo '--- Public key ---'
+        if [ -f '{{.SSH_KEY_PATH}}.pub' ]; then
+          cat '{{.SSH_KEY_PATH}}.pub'
+        else
+          echo 'No public key found.'
+        fi
+
+        echo
+        echo '--- Proxmox SSH connection ---'
+        if [ -n "$proxmox_ssh_host" ]; then
+          echo "Host:                  $proxmox_ssh_host"
+        else
+          echo 'Host:                  not set'
+        fi
+        echo "Port:                  $proxmox_ssh_port"
+        echo "User:                  $proxmox_ssh_user"
+        echo "Connect timeout:       ${ssh_connect_timeout}s"
+        if [ -n "$proxmox_repo_dir" ]; then
+          echo "Remote repo dir:       $proxmox_repo_dir"
+        else
+          echo 'Remote repo dir:       not set'
+        fi
