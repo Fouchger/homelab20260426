@@ -99,7 +99,6 @@ tasks:
       - task: mikrotik:ssh-copy-id
       - task: mikrotik:backup:run
       - task: mikrotik:plan:run
-      - task: proxmox_scripts:plex:create
       - |
         # Print Header
         set -euo pipefail
