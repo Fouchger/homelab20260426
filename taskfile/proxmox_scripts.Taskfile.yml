@@ -19,6 +19,8 @@ version: '3'
 vars:
   CODE_SERVER_UPSTREAM_URL: https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/addon/coder-code-server.sh
   CODE_SERVER_STATIC_SCRIPT: services/proxmox_helper_scripts/coder-code-server.sh
+  PROXMOX_HELPER_LXC_RUNNER: scripts/lib/proxmox-helper-lxc-create.sh
+  PLEX_STATIC_SCRIPT: services/proxmox_helper_scripts/plex.sh
 
 tasks:
   default:
@@ -129,4 +131,45 @@ tasks:
           echo
           bash "$static_script"
         fi
+
+  plex:create:
+    desc: Create one or more Plex LXCs on the Proxmox host via SSH using the reviewed helper script.
+    deps:
+      - :ssh:generate
+      - :ssh:known-hosts:trust:proxmox
+    cmds:
+      - |
+        # =============================================================================
+        # Task: plex:create
+        # Purpose:
+        #   Create Plex LXC servers on the configured Proxmox host using the reviewed
+        #   helper script and persisted per-server defaults.
+        # =============================================================================
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Create Plex LXC server" "PEACH"
+      - |
+        set -euo pipefail
+
+        runner="{{.ROOT_DIR}}/{{.PROXMOX_HELPER_LXC_RUNNER}}"
+        plex_script="{{.ROOT_DIR}}/{{.PLEX_STATIC_SCRIPT}}"
+
+        if [ ! -x "$runner" ]; then
+          echo "ERROR: Proxmox helper LXC runner is missing or not executable: $runner" >&2
+          exit 1
+        fi
+
+        if [ ! -f "$plex_script" ]; then
+          echo "ERROR: Plex helper script was not found: $plex_script" >&2
+          exit 1
+        fi
+
+        ROOT_DIR="{{.ROOT_DIR}}" \
+        CONFIG_ENV_FILE="{{.CONFIG_ENV_FILE}}" \
+        TMP_DIR="{{.TMP_DIR}}" \
+        SSH_KEY_PATH="{{.SSH_KEY_PATH}}" \
+        SSH_KNOWN_HOSTS_FILE="{{.SSH_KNOWN_HOSTS_FILE}}" \
+        ANSIBLE_INVENTORY_FILE="{{.ROOT_DIR}}/state/ansible/inventory.yml" \
+          "$runner" plex "$plex_script"
 
