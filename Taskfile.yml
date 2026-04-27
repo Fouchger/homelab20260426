@@ -1,0 +1,76 @@
+# ==============================================================================
+# File: Taskfile.yml
+# Purpose:
+#   Root Task entry point and control plane for the homelab repository.
+# Notes:
+#   - install.sh downloads or updates the repository only.
+#   - Taskfile.yml is the operational entrypoint after installation.
+#   - Shared variables are defined once here and reused by child Taskfiles.
+# ==============================================================================
+
+
+version: '3'
+
+silent: true
+
+dotenv:
+  - state/config/.env
+
+vars:
+  # Repo-wide shared variables
+  STATE_DIR: '{{default (printf "%s/state" .ROOT_DIR) .STATE_DIR}}'
+  CONFIG_DIR: '{{default (printf "%s/config" .STATE_DIR) .CONFIG_DIR}}'
+  SECRETS_DIR: '{{default (printf "%s/secrets" .STATE_DIR) .SECRETS_DIR}}'
+  TMP_DIR: '{{default (printf "%s/tmp" .STATE_DIR) .TMP_DIR}}'
+  BACKUP_DIR: '{{default (printf "%s/backups" .STATE_DIR) .BACKUP_DIR}}'
+  CONFIG_ENV_FILE: '{{default (printf "%s/.env" .CONFIG_DIR) .CONFIG_ENV_FILE}}'
+  AUDIT_DIR: '{{default (printf "%s/audit" .STATE_DIR) .AUDIT_DIR}}'
+  DR_DIR: '{{default (printf "%s/dr" .STATE_DIR) .DR_DIR}}'
+  AGE_DIR: '{{.SECRETS_DIR}}/age'
+  AGE_KEYS_FILE: '{{.AGE_DIR}}/keys.txt'
+  PASSWORDS_DIR: '{{.SECRETS_DIR}}/passwords'
+  PASSWORDS_ENC_ENV_FILE: '{{.PASSWORDS_DIR}}/passwords.enc.env'
+  PASSWORDS_EXAMPLE_ENV_FILE: '{{.PASSWORDS_DIR}}/passwords.example.env'
+  PASSWORDS_RUNTIME_ENV_FILE: '{{.PASSWORDS_DIR}}/.runtime.env'
+  SOPS_CONFIG_FILE: '{{.ROOT_DIR}}/.sops.yaml'
+  NONINTERACTIVE: '{{default "0" .NONINTERACTIVE}}'
+
+
+
+includes:
+  git_github: ./taskfile/git_github.Taskfile.yml
+  proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
+  secrets_age: ./taskfile/secrets_sops_age.Taskfile.yml
+  secrets_openbao: ./taskfile/secrets_openbao.Taskfile.yml
+
+tasks:
+  default:
+    desc: Show available homelab tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available secrets tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  homelab:setup:
+    desc: Task to setup and configure complete homelab in in step.  
+    cmds:
+      - |
+        bash ./scripts/lib/ensure-executable-scripts.sh
+        clear
+        ./scripts/banner/banner.sh
+      - task: proxmox_scripts:code-server:install
+      - task: secrets_age:prepare
+      - task: git_github:bootstrap
+      - task: secrets_openbao:prepare
+
+
+  
+
+  test:
+    desc: test   
+    cmds:
+      - |
+        echo '{{.SECRETS_DIR}}'

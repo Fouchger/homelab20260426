@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# Proxmox helper script tasks
+# =============================================================================
+# Purpose:
+#   Provide explicit operator entry points for helper scripts used by this repo.
+#
+# Notes:
+#   - The code-server installer is intentionally interactive.
+#   - The operator must choose between the latest upstream community script and
+#     the reviewed static copy stored in this repository.
+#   - The selected script runs locally on the server where this repo is checked
+#     out. This task does not assume that the local server is a Proxmox host.
+# =============================================================================
+
+version: '3'
+
+vars:
+  CODE_SERVER_UPSTREAM_URL: https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/addon/coder-code-server.sh
+  CODE_SERVER_STATIC_SCRIPT: services/proxmox_helper_scripts/coder-code-server.sh
+
+tasks:
+  default:
+    desc: Show available homelab tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available secrets tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  code-server:install:
+    desc: Install code-server using either the latest upstream script or the reviewed static repo script.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Install Code Server" "PEACH"    
+      - |
+        set -euo pipefail
+
+        upstream_url="{{.CODE_SERVER_UPSTREAM_URL}}"
+        static_script="{{.ROOT_DIR}}/{{.CODE_SERVER_STATIC_SCRIPT}}"
+
+        require_command() {
+          command -v "$1" >/dev/null 2>&1 || {
+            echo "ERROR: Required command not found: $1" >&2
+            exit 1
+          }
+        }
+
+        require_command bash
+        require_command curl
+        require_command hostname
+
+        if command -v code-server >/dev/null 2>&1; then
+          echo "INFO: code-server is already installed: $(command -v code-server)"
+          code-server --version || true
+          exit 0
+        fi
+
+        if [[ ! -f "$static_script" ]]; then
+          echo "ERROR: Static code-server helper script was not found: $static_script" >&2
+          exit 1
+        fi
+
+        echo
+        echo "Code-server installer"
+        echo "====================="
+        echo "This task runs locally on the server where the repo is checked out."
+        echo
+        echo "Available install sources:"
+        echo "  1) latest  - Download and run the latest upstream community script"
+        echo "  2) static  - Run the reviewed static script from this repository"
+        echo
+
+        while true; do
+          printf "Select install source [static]: "
+          read -r install_source
+
+          install_source="${install_source:-static}"
+
+          case "$install_source" in
+            1|latest)
+              selected_source="latest"
+              break
+              ;;
+            2|static)
+              selected_source="static"
+              break
+              ;;
+            *)
+              echo "ERROR: Enter 1, 2, latest, or static."
+              ;;
+          esac
+        done
+
+        echo
+        echo "Code-server install summary"
+        echo "==========================="
+        echo "Host:              $(hostname -f 2>/dev/null || hostname)"
+        echo "Repository path:   $ROOT_DIR"
+        echo "Selected source:   $selected_source"
+
+        if [[ "$selected_source" == "latest" ]]; then
+          echo "Upstream URL:      $upstream_url"
+          echo "Version policy:    Latest at execution time, not pinned"
+          echo
+          echo "WARNING: This will execute code downloaded from the upstream URL above."
+          printf "Continue with latest upstream script? [y/N]: "
+          read -r confirm_latest
+
+          case "$confirm_latest" in
+            y|Y|yes|YES)
+              bash -c "$(curl -fsSL "$upstream_url")"
+              ;;
+            *)
+              echo "INFO: Cancelled."
+              exit 0
+              ;;
+          esac
+        else
+          echo "Static script:     $static_script"
+          echo "Version policy:    Reviewed repo copy"
+          echo
+          bash "$static_script"
+        fi
+

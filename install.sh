@@ -353,7 +353,7 @@ create_state() {
 
   cd "$TARGET_DIR"
 
-  mkdir -p state/config state/ansible
+  mkdir -p state/config
   env_file="${TARGET_DIR}/state/config/.env"
 
   upsert_env "$env_file" ROOT_DIR "$TARGET_DIR"
@@ -362,9 +362,6 @@ create_state() {
   upsert_env "$env_file" SETUP "$SETUP"
   upsert_env "$env_file" NONINTERACTIVE "$NONINTERACTIVE"
 
-  if [ ! -f state/ansible/inventory.yml ] && [ -f templates/inventory.yml.tpl ]; then
-    install -m 0600 templates/inventory.yml.tpl state/ansible/inventory.yml
-  fi
 }
 
 ensure_executables() {

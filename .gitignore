@@ -1,0 +1,77 @@
+# ==============================================================================
+# File: .gitignore
+# Purpose:
+#   Ignore local runtime state, secrets, build outputs and editor files.
+# ==============================================================================
+
+# Local environment and secrets
+.env
+*.env
+!*.env.example
+state/config/.env
+state/secrets/passwords/passwords.enc.env
+state/secrets/passwords/*.env
+!state/secrets/passwords/passwords.example.env
+
+# Generated state
+state/
+state/tmp/
+state/backups/
+state/dr/
+state/audit/
+state/mikrotik/
+state/terraform/*.tfstate
+state/terraform/*.tfstate.*
+state/ansible/inventory.yml
+state/secrets/age/*.key
+state/secrets/openbao/
+state/secrets/age/admin.pub
+state/secrets/age/keys.txt
+state/secrets/age/recovery.pub
+state/secrets/sops/examples/bootstrap.enc.yaml
+HomeLab20260424/state/mikrotik/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+*.auto.tfvars
+
+# Ansible
+*.retry
+
+# Packer
+packer_cache/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Binaries and logs
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
+*.out
+coverage.*
+
+# sops
+.sops.yaml
+
+# Patch leftovers
+*.orig
+*.rej
+*.patch
+*.diff
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Ansible Galaxy installed collections
+ansible/collections/ansible_collections/
