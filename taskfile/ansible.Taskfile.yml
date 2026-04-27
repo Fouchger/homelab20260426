@@ -161,6 +161,12 @@ tasks:
     deps: [tools:check]
     cmds:
       - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Generate state/ansible/inventory.yml from state/config/.env values" "PEACH"  
+      - |
         # =============================================================================
         # Task: inventory:render
         # Purpose:

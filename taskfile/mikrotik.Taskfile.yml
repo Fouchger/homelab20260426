@@ -63,6 +63,12 @@ tasks:
     run: once
     cmds:
       - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Ensure MikroTik connection values exist in state/config/.env" "PEACH"  
+      - |
         # =============================================================================
         # Task: connection:ensure
         # Purpose:
@@ -141,6 +147,12 @@ tasks:
       - :secrets_age:prepare
     cmds:
       - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Prompt for required MikroTik secrets and store them in the encrypted passwords file" "PEACH"  
+      - |
         # =============================================================================
         # Task: secrets:ensure
         # Purpose:
@@ -217,6 +229,12 @@ tasks:
       - :ssh:generate
       - :ansible:tools:check
     cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Add the local SSH public key to configured MikroTik router hosts if needed" "PEACH"  
       - |
         # =============================================================================
         # Task: ssh-copy-id
@@ -335,6 +353,12 @@ tasks:
       - :ansible:tools:check
     cmds:
       - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Run MikroTik backup without regenerating inventory" "PEACH"  
+      - |
         # =============================================================================
         # Task: backup:run
         # Purpose:
@@ -419,6 +443,12 @@ tasks:
       - :ansible:tools:check
     cmds:
       - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Run MikroTik plan without regenerating inventory" "PEACH"  
+      - |
         # =============================================================================
         # Task: plan:run
         # Purpose:
@@ -454,6 +484,12 @@ tasks:
       - secrets:ensure
       - :ansible:tools:check
     cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Apply MikroTik desired state without regenerating inventory" "PEACH"  
       - |
         # =============================================================================
         # Task: apply:run

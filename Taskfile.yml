@@ -99,6 +99,12 @@ tasks:
       - task: mikrotik:ssh-copy-id
       - task: mikrotik:backup:run
       - task: mikrotik:plan:run
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
+        print_section_header "Homelab setup is complete.  Enjoy!" "PEACH"  
 
 
   
