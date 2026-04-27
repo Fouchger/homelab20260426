@@ -10,6 +10,7 @@
   gather_facts: false
 
   vars:
+    ansible_password: "{{ lookup('env', 'MIKROTIK_ROUTER_ADMIN_PASSWORD') | default(omit, true) }}"
     mikrotik_router_output_dir: "{{ lookup('env', 'MIKROTIK_OUTPUT_DIR') | default(playbook_dir ~ '/../../state/mikrotik/generated/' ~ lookup('pipe', 'date +%Y%m%d-%H%M%S'), true) }}"
     mikrotik_router_render_only: true
     mikrotik_router_apply_config: false

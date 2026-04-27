@@ -38,6 +38,7 @@ tasks:
 
   bootstrap:
     desc: Prepare Ansible dependencies, MikroTik connection values, SSH access, and inventory
+    run: once
     cmds:
       - |
         # Print Header
@@ -47,11 +48,13 @@ tasks:
         print_section_header "Prepare Ansible dependencies, MikroTik connection values, SSH access, and inventory" "PEACH"    
       - task: :ansible:bootstrap
       - task: connection:ensure
+      - task: secrets:ensure
       - task: ssh-copy-id
       - task: :ansible:inventory:render
 
   connection:ensure:
     desc: Ensure MikroTik connection values exist in state/config/.env
+    run: once
     cmds:
       - |
         # =============================================================================
@@ -125,8 +128,85 @@ tasks:
 
         echo "MikroTik connection configured for ${mikrotik_user}@${mikrotik_host}:${mikrotik_port}."
 
+  secrets:ensure:
+    desc: Prompt for required MikroTik secrets and store them in the encrypted passwords file
+    run: once
+    deps:
+      - :secrets_age:prepare
+    cmds:
+      - |
+        # =============================================================================
+        # Task: secrets:ensure
+        # Purpose:
+        #   Ensure required MikroTik runtime secrets are present in the encrypted
+        #   passwords dotenv file before render, plan, backup, or apply steps run.
+        # =============================================================================
+        set -euo pipefail
+        mkdir -p '{{.TMP_DIR}}'
+        chmod 700 '{{.TMP_DIR}}'
+
+        temp_plain="$(mktemp '{{.TMP_DIR}}/mikrotik-passwords.XXXXXX.env')"
+        temp_next="$(mktemp '{{.TMP_DIR}}/mikrotik-passwords-next.XXXXXX.env')"
+        trap 'rm -f "$temp_plain" "$temp_next"' EXIT
+
+        if [ -f '{{.PASSWORDS_ENC_ENV_FILE}}' ]; then
+          SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --decrypt '{{.PASSWORDS_ENC_ENV_FILE}}' > "$temp_plain"
+        else
+          install -m 600 /dev/null "$temp_plain"
+        fi
+
+        get_secret_value() {
+          secret_key="$1"
+          awk -F= -v key="$secret_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$temp_plain"
+        }
+
+        upsert_secret_value() {
+          secret_key="$1"
+          secret_value="$2"
+          awk -F= -v key="$secret_key" '$1 != key' "$temp_plain" > "$temp_next"
+          printf '%s=%s\n' "$secret_key" "$secret_value" >> "$temp_next"
+          mv "$temp_next" "$temp_plain"
+          chmod 600 "$temp_plain"
+        }
+
+        prompt_secret_value() {
+          secret_key="$1"
+          prompt_text="$2"
+          current_value="$(get_secret_value "$secret_key")"
+          if [ -n "$current_value" ] && [ "$current_value" != 'replace-me' ] && [ "$current_value" != 'CHANGE_ME' ]; then
+            return 0
+          fi
+          env_value="$(eval "printf '%s' \"\${${secret_key}:-}\"")"
+          if [ -n "$env_value" ]; then
+            upsert_secret_value "$secret_key" "$env_value"
+            return 0
+          fi
+          if [ '{{.NONINTERACTIVE}}' = '1' ]; then
+            echo "Required MikroTik secret is missing: $secret_key" >&2
+            exit 1
+          fi
+          printf '%s' "$prompt_text" > /dev/tty
+          stty -echo < /dev/tty
+          IFS= read -r secret_value < /dev/tty
+          stty echo < /dev/tty
+          printf '\n' > /dev/tty
+          [ -n "$secret_value" ] || { echo "Required MikroTik secret is empty: $secret_key" >&2; exit 1; }
+          upsert_secret_value "$secret_key" "$secret_value"
+        }
+
+        prompt_secret_value MIKROTIK_ROUTER_ADMIN_PASSWORD 'MikroTik router admin password: '
+        prompt_secret_value MIKROTIK_WIFI_PASSPHRASE_USERS 'MikroTik USERS Wi-Fi passphrase: '
+        prompt_secret_value MIKROTIK_WIFI_PASSPHRASE_MGMT 'MikroTik MGMT Wi-Fi passphrase: '
+        prompt_secret_value MIKROTIK_WIFI_PASSPHRASE_IOT 'MikroTik IOT Wi-Fi passphrase: '
+        prompt_secret_value MIKROTIK_WIFI_PASSPHRASE_GUEST 'MikroTik GUEST Wi-Fi passphrase: '
+
+        SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --encrypt --filename-override 'state/secrets/passwords/passwords.enc.env' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENC_ENV_FILE}}'
+        chmod 600 '{{.PASSWORDS_ENC_ENV_FILE}}'
+        echo 'MikroTik secrets are present in the encrypted passwords file.'
+
   ssh-copy-id:
     desc: Add the local SSH public key to configured MikroTik router hosts if needed
+    run: once
     deps:
       - :ssh:generate
       - :ansible:tools:check
@@ -138,6 +218,13 @@ tasks:
         #   Ensure key-based SSH access to MikroTik hosts used by Ansible.
         # =============================================================================
         set -euo pipefail
+
+        runtime_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime.XXXXXX.env')"
+        runtime_shell_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime-shell.XXXXXX.env')"
+        trap 'rm -f "$runtime_env" "$runtime_shell_env"' EXIT
+        SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --decrypt '{{.PASSWORDS_ENC_ENV_FILE}}' > "$runtime_env"
+        python3 '{{.ROOT_DIR}}/scripts/lib/dotenv-to-shell-exports.py' "$runtime_env" "$runtime_shell_env"
+        . "$runtime_shell_env"
 
         get_env_value() {
           env_key="$1"
@@ -204,12 +291,22 @@ tasks:
           fi
 
           echo "Installing SSH key for ${router_name} (${user}@${host}:${port})."
-          ssh-copy-id \
-            -i '{{.SSH_KEY_PATH}}.pub' \
-            -p "$port" \
-            -o ConnectTimeout="$default_timeout" \
-            -o StrictHostKeyChecking=yes \
-            "$user@$host"
+          if [ -n "${MIKROTIK_ROUTER_ADMIN_PASSWORD:-}" ]; then
+            command -v sshpass >/dev/null 2>&1 || { echo 'sshpass is required to install the MikroTik SSH key with a password. Run task ansible:tools:install.' >&2; exit 1; }
+            sshpass -p "$MIKROTIK_ROUTER_ADMIN_PASSWORD" ssh-copy-id \
+              -i '{{.SSH_KEY_PATH}}.pub' \
+              -p "$port" \
+              -o ConnectTimeout="$default_timeout" \
+              -o StrictHostKeyChecking=yes \
+              "$user@$host"
+          else
+            ssh-copy-id \
+              -i '{{.SSH_KEY_PATH}}.pub' \
+              -p "$port" \
+              -o ConnectTimeout="$default_timeout" \
+              -o StrictHostKeyChecking=yes \
+              "$user@$host"
+          fi
         done
 
   backup:
@@ -220,10 +317,28 @@ tasks:
         set -euo pipefail
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
-        print_section_header "Back up MikroTik RouterOS configuration using Ansible" "PEACH"   
+        print_section_header "Back up MikroTik RouterOS configuration using Ansible" "PEACH"
       - task: :ansible:inventory:render
+      - task: backup:run
+
+  backup:run:
+    internal: true
+    desc: Run MikroTik backup without regenerating inventory
+    deps: [secrets:ensure]
+    cmds:
       - |
+        # =============================================================================
+        # Task: backup:run
+        # Purpose:
+        #   Run the backup playbook using the existing generated inventory.
+        # =============================================================================
         set -euo pipefail
+        runtime_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime.XXXXXX.env')"
+        runtime_shell_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime-shell.XXXXXX.env')"
+        trap 'rm -f "$runtime_env" "$runtime_shell_env"' EXIT
+        SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --decrypt '{{.PASSWORDS_ENC_ENV_FILE}}' > "$runtime_env"
+        python3 '{{.ROOT_DIR}}/scripts/lib/dotenv-to-shell-exports.py' "$runtime_env" "$runtime_shell_env"
+        . "$runtime_shell_env"
         backup_stamp="$(date +%Y%m%d-%H%M)"
         mkdir -p '{{.MIKROTIK_BACKUP_ROOT}}'
         chmod 700 '{{.MIKROTIK_BACKUP_ROOT}}'
@@ -243,10 +358,28 @@ tasks:
         set -euo pipefail
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
-        print_section_header "Render the desired MikroTik RouterOS configuration only" "PEACH"   
+        print_section_header "Render the desired MikroTik RouterOS configuration only" "PEACH"
       - task: :ansible:inventory:render
+      - task: render:run
+
+  render:run:
+    internal: true
+    desc: Render MikroTik desired state without regenerating inventory
+    deps: [secrets:ensure]
+    cmds:
       - |
+        # =============================================================================
+        # Task: render:run
+        # Purpose:
+        #   Render desired RouterOS configuration using the existing generated inventory.
+        # =============================================================================
         set -euo pipefail
+        runtime_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime.XXXXXX.env')"
+        runtime_shell_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime-shell.XXXXXX.env')"
+        trap 'rm -f "$runtime_env" "$runtime_shell_env"' EXIT
+        SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --decrypt '{{.PASSWORDS_ENC_ENV_FILE}}' > "$runtime_env"
+        python3 '{{.ROOT_DIR}}/scripts/lib/dotenv-to-shell-exports.py' "$runtime_env" "$runtime_shell_env"
+        . "$runtime_shell_env"
         output_dir='{{.MIKROTIK_OUTPUT_ROOT}}/'"$(date +%Y%m%d-%H%M%S)"
         mkdir -p "$output_dir"
         chmod 700 "$output_dir"
@@ -264,10 +397,28 @@ tasks:
         set -euo pipefail
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
-        print_section_header "Render and diff desired MikroTik RouterOS configuration against the live routery" "PEACH"   
+        print_section_header "Render and diff desired MikroTik RouterOS configuration against the live router" "PEACH"
       - task: :ansible:inventory:render
+      - task: plan:run
+
+  plan:run:
+    internal: true
+    desc: Run MikroTik plan without regenerating inventory
+    deps: [secrets:ensure]
+    cmds:
       - |
+        # =============================================================================
+        # Task: plan:run
+        # Purpose:
+        #   Render and diff desired RouterOS configuration using existing inventory.
+        # =============================================================================
         set -euo pipefail
+        runtime_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime.XXXXXX.env')"
+        runtime_shell_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime-shell.XXXXXX.env')"
+        trap 'rm -f "$runtime_env" "$runtime_shell_env"' EXIT
+        SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --decrypt '{{.PASSWORDS_ENC_ENV_FILE}}' > "$runtime_env"
+        python3 '{{.ROOT_DIR}}/scripts/lib/dotenv-to-shell-exports.py' "$runtime_env" "$runtime_shell_env"
+        . "$runtime_shell_env"
         output_dir='{{.MIKROTIK_OUTPUT_ROOT}}/'"$(date +%Y%m%d-%H%M%S)"
         mkdir -p "$output_dir"
         chmod 700 "$output_dir"
@@ -282,8 +433,26 @@ tasks:
     desc: Render, diff, confirm, and apply desired MikroTik RouterOS configuration
     cmds:
       - task: :ansible:inventory:render
+      - task: apply:run
+
+  apply:run:
+    internal: true
+    desc: Apply MikroTik desired state without regenerating inventory
+    deps: [secrets:ensure]
+    cmds:
       - |
+        # =============================================================================
+        # Task: apply:run
+        # Purpose:
+        #   Apply desired RouterOS configuration using existing inventory.
+        # =============================================================================
         set -euo pipefail
+        runtime_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime.XXXXXX.env')"
+        runtime_shell_env="$(mktemp '{{.TMP_DIR}}/mikrotik-runtime-shell.XXXXXX.env')"
+        trap 'rm -f "$runtime_env" "$runtime_shell_env"' EXIT
+        SOPS_AGE_KEY_FILE='{{.AGE_KEYS_FILE}}' sops --decrypt '{{.PASSWORDS_ENC_ENV_FILE}}' > "$runtime_env"
+        python3 '{{.ROOT_DIR}}/scripts/lib/dotenv-to-shell-exports.py' "$runtime_env" "$runtime_shell_env"
+        . "$runtime_shell_env"
         output_dir='{{.MIKROTIK_OUTPUT_ROOT}}/'"$(date +%Y%m%d-%H%M%S)"
         mkdir -p "$output_dir"
         chmod 700 "$output_dir"

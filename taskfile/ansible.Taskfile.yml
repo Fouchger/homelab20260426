@@ -31,17 +31,17 @@ tasks:
       - task --taskfile '{{.TASKFILE}}' --list
 
   bootstrap:
-    desc: Install Ansible and required Galaxy collections, then generate inventory
+    desc: Install Ansible and required Galaxy collections
+    run: once
     cmds:
       - |
         # Print Header
         set -euo pipefail
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/scripts/lib/terminal-colours.sh"
-        print_section_header "Install Ansible and required Galaxy collections, then generate inventory" "PEACH"    
+        print_section_header "Install Ansible and required Galaxy collections" "PEACH"    
       - task: tools:install
       - task: collections:install
-      - task: inventory:render
 
   tools:check:apt:
     internal: true
@@ -77,7 +77,16 @@ tasks:
           openssh-client \
           python3 \
           python3-pip \
+          python3-paramiko \
           sshpass
+
+        if apt-cache show python3-ansible-pylibssh >/dev/null 2>&1; then
+          sudo apt-get install -y --no-install-recommends python3-ansible-pylibssh
+        fi
+
+        python3 -m pip install --break-system-packages --upgrade \
+          ansible-pylibssh \
+          paramiko
       - task: tools:check
 
   tools:check:
@@ -86,12 +95,32 @@ tasks:
       - |
         set -euo pipefail
         missing=0
-        for tool in ansible ansible-playbook ansible-galaxy ssh ssh-copy-id ssh-keyscan; do
+        for tool in ansible ansible-playbook ansible-galaxy ssh ssh-copy-id ssh-keyscan sshpass python3; do
           if ! command -v "$tool" >/dev/null 2>&1; then
             echo "Missing required tool: $tool" >&2
             missing=1
           fi
         done
+
+        if ! python3 - <<'PYTHON_CHECK'
+        import importlib.metadata
+        import importlib.util
+        import sys
+
+        if importlib.util.find_spec("paramiko") is None:
+            print("Missing required Python module: paramiko", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            importlib.metadata.version("ansible-pylibssh")
+        except importlib.metadata.PackageNotFoundError:
+            if importlib.util.find_spec("ansible_pylibssh") is None:
+                print("Missing required Python package: ansible-pylibssh", file=sys.stderr)
+                sys.exit(1)
+        PYTHON_CHECK
+        then
+          missing=1
+        fi
         [ "$missing" -eq 0 ]
         echo 'Ansible tooling check completed successfully.'
 

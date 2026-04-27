@@ -14,10 +14,12 @@
   gather_facts: false
 
   vars:
+    ansible_password: "{{ lookup('env', 'MIKROTIK_ROUTER_ADMIN_PASSWORD') | default(omit, true) }}"
     mikrotik_backup_root: "{{ lookup('env', 'MIKROTIK_BACKUP_ROOT') | default(playbook_dir ~ '/../../state/mikrotik', true) }}"
     mikrotik_backup_stamp: "{{ lookup('env', 'MIKROTIK_BACKUP_STAMP') | default(lookup('pipe', 'date +%Y%m%d-%H%M'), true) }}"
     mikrotik_backup_dir: "{{ mikrotik_backup_root }}/{{ mikrotik_backup_stamp }}"
-    mikrotik_export_command: "/export show-sensitive terse"
+    mikrotik_export_command: "/export terse show-sensitive"
+    mikrotik_backup_no_log: "{{ (lookup('env', 'MIKROTIK_BACKUP_NO_LOG') | default('true', true)) | bool }}"
 
   tasks:
     - name: Ensure local MikroTik backup directory exists
@@ -28,12 +30,23 @@
       delegate_to: localhost
       run_once: true
 
+    - name: Check RouterOS command channel before sensitive export
+      community.routeros.command:
+        commands:
+          - /system identity print
+          - /system resource print
+      register: mikrotik_preflight
+
+    - name: Confirm RouterOS command channel is ready
+      ansible.builtin.debug:
+        msg: "RouterOS command channel is ready for {{ inventory_hostname }}."
+
     - name: Export RouterOS configuration with sensitive values included
       community.routeros.command:
         commands:
           - "{{ mikrotik_export_command }}"
       register: mikrotik_export
-      no_log: true
+      no_log: "{{ mikrotik_backup_no_log }}"
 
     - name: Write full RouterOS export to local state directory
       ansible.builtin.copy:
@@ -64,7 +77,7 @@
           backup_stamp={{ mikrotik_backup_stamp }}
           inventory_host={{ inventory_hostname }}
           backup_file={{ mikrotik_backup_dir }}/{{ inventory_hostname }}.rsc
-          export_command=/export show-sensitive terse
+          export_command={{ mikrotik_export_command }}
         mode: '0600'
       delegate_to: localhost
 

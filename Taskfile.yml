@@ -93,10 +93,13 @@ tasks:
       - task: ssh:bootstrap
       - task: proxmox:bootstrap
       - task: ansible:bootstrap
-      - task: mikrotik:bootstrap
-      - task: mikrotik:backup
-      - task: mikrotik:render
-      - task: mikrotik:plan
+      - task: mikrotik:connection:ensure
+      - task: mikrotik:secrets:ensure
+      - task: ansible:inventory:render
+      - task: mikrotik:ssh-copy-id
+      - task: mikrotik:backup:run
+      - task: mikrotik:render:run
+      - task: mikrotik:plan:run
 
 
   
