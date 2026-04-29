@@ -1,0 +1,20 @@
+---
+# ==============================================================================
+# File: ansible/roles/linux_ssh_access/meta/main.yml
+# Purpose:
+#   Metadata for the Linux SSH access management role.
+# ==============================================================================
+
+galaxy_info:
+  role_name: linux_ssh_access
+  author: homelab
+  description: Manage control-node SSH access to Linux servers.
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: Debian
+      versions: ['all']
+    - name: Ubuntu
+      versions: ['all']
+
+dependencies: []

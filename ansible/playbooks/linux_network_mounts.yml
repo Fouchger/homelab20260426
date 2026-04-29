@@ -1,0 +1,17 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/linux_network_mounts.yml
+# Purpose:
+#   Mount configured network shares on Linux VMs and LXCs.
+# Notes:
+#   - Default target excludes MikroTik/network devices.
+#   - Credentials should come from environment variables, Ansible Vault, or host/group vars.
+# ==============================================================================
+
+- name: Manage Linux network mounts
+  hosts: "{{ lookup('env', 'ANSIBLE_NETWORK_MOUNTS_LIMIT') | default('all:!mikrotik', true) }}"
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: linux_network_mounts

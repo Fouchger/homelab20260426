@@ -1,0 +1,78 @@
+---
+# ==============================================================================
+# File: ansible/roles/linux_network_mounts/defaults/main.yml
+# Purpose:
+#   Defaults for mounting homelab network shares on Linux VMs and LXCs.
+# Notes:
+#   - CIFS credentials are written to root-only files and referenced from fstab.
+#   - The role supports CIFS and other fstab-compatible network filesystems.
+# ==============================================================================
+
+linux_network_mounts_enabled: true
+linux_network_mounts_install_packages: true
+linux_network_mounts_manage_mounts: true
+linux_network_mounts_mount_all_after_change: true
+linux_network_mounts_fail_on_mount_error: true
+
+linux_network_mounts_default_state: mounted
+linux_network_mounts_default_fstype: cifs
+linux_network_mounts_default_owner: root
+linux_network_mounts_default_group: root
+linux_network_mounts_default_mount_mode: '0755'
+linux_network_mounts_default_file_mode: '0644'
+
+linux_network_mounts_cifs_package_name: cifs-utils
+linux_network_mounts_nfs_package_name: nfs-common
+
+linux_network_mounts_omv_host: "{{ lookup('env', 'OMV_SERVER_IP') | default('192.168.30.20', true) }}"
+linux_network_mounts_cifs_username: "{{ lookup('env', 'OMV_CIFS_USERNAME') | default('', true) }}"
+linux_network_mounts_cifs_password: "{{ lookup('env', 'OMV_CIFS_PASSWORD') | default('', true) }}"
+linux_network_mounts_cifs_domain: "{{ lookup('env', 'OMV_CIFS_DOMAIN') | default('', true) }}"
+linux_network_mounts_credentials_dir: /root/.smbcredentials
+linux_network_mounts_credentials_file: "{{ linux_network_mounts_credentials_dir }}/omv.conf"
+
+linux_network_mounts_default_network_options:
+  - _netdev
+  - nofail
+
+linux_network_mounts_default_cifs_options:
+  - "credentials={{ linux_network_mounts_credentials_file }}"
+  - uid=1000
+  - gid=1000
+  - iocharset=utf8
+  - vers=3.0
+  - _netdev
+  - nofail
+  - x-systemd.automount
+  - x-systemd.idle-timeout=60
+
+# Example share item fields:
+# - name: TB5a
+#   src: "//192.168.30.20/TB5a"    # Optional when server/share are supplied.
+#   server: "192.168.30.20"        # Optional; defaults to linux_network_mounts_omv_host.
+#   share: TB5a
+#   path: /mnt/TB5a
+#   fstype: cifs
+#   opts: []                       # Optional; defaults to linux_network_mounts_default_cifs_options.
+#   state: mounted                 # mounted, present, absent, unmounted, remounted, ephemeral.
+linux_network_mounts_shares:
+  - name: TB5a
+    server: "{{ linux_network_mounts_omv_host }}"
+    share: TB5a
+    path: /mnt/TB5a
+  - name: TB10a
+    server: "{{ linux_network_mounts_omv_host }}"
+    share: TB10a
+    path: /mnt/TB10a
+  - name: TB10b
+    server: "{{ linux_network_mounts_omv_host }}"
+    share: TB10b
+    path: /mnt/TB10b
+  - name: TB4a
+    server: "{{ linux_network_mounts_omv_host }}"
+    share: TB4a
+    path: /mnt/TB4a
+  - name: TB16a
+    server: "{{ linux_network_mounts_omv_host }}"
+    share: TB16a
+    path: /mnt/TB16a

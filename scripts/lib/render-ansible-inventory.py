@@ -151,8 +151,10 @@ def append_proxmox_helper_lxc(lines: list[str], values: dict[str, str], ssh_key_
                     hostname,
                     {
                         "ansible_host": cidr_to_ip(network),
-                        "ansible_user": "root",
+                        "ansible_user": values.get(f"{prefix}ANSIBLE_USER", values.get("ANSIBLE_LINUX_USER", "root") or "root"),
                         "ansible_ssh_private_key_file": ssh_key_path,
+                        "ansible_python_interpreter": values.get(f"{prefix}ANSIBLE_PYTHON_INTERPRETER", values.get("ANSIBLE_LINUX_PYTHON_INTERPRETER", "/usr/bin/python3") or "/usr/bin/python3"),
+                        "ansible_become": values.get(f"{prefix}ANSIBLE_BECOME", values.get("ANSIBLE_LINUX_BECOME", "false") or "false"),
                         "homelab_service": service.lower(),
                         "proxmox_ctid": values.get(f"{prefix}VAR_CTID", ""),
                         "proxmox_tags": values.get(f"{prefix}VAR_TAGS", ""),
@@ -172,6 +174,8 @@ def append_proxmox_helper_lxc(lines: list[str], values: dict[str, str], ssh_key_
         lines.append(f"          ansible_host: {yaml_quote(host_values['ansible_host'])}")
         lines.append(f"          ansible_user: {yaml_quote(host_values['ansible_user'])}")
         lines.append(f"          ansible_ssh_private_key_file: {yaml_quote(host_values['ansible_ssh_private_key_file'])}")
+        lines.append(f"          ansible_python_interpreter: {yaml_quote(host_values['ansible_python_interpreter'])}")
+        lines.append(f"          ansible_become: {str(host_values['ansible_become']).lower()}")
         lines.append(f"          homelab_service: {yaml_quote(host_values['homelab_service'])}")
         if host_values["proxmox_ctid"] != "":
             lines.append(f"          proxmox_ctid: {host_values['proxmox_ctid']}")

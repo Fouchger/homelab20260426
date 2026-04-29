@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# ==============================================================================
+# File: plex.Taskfile.yml
+# Purpose:
+#   Plex-specific homelab automation tasks.
+# Notes:
+#   - Targets only the Ansible inventory group named "plex".
+#   - Network mount tasks are idempotent; existing correct mounts are left alone.
+# ==============================================================================
+
+version: '3'
+
+silent: true
+
+tasks:
+  default:
+    desc: Show available Plex tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show available Plex tasks
+    cmds:
+      - task --taskfile '{{.TASKFILE}}' --list
+
+  network-mounts:check:
+    desc: Preview OMV/CIFS network mounts on Plex servers only
+    cmds:
+      - |
+        set -euo pipefail
+        ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+          task ansible:network-mounts:check
+
+  network-mounts:manage:
+    desc: Mount OMV/CIFS network drives on Plex servers only, with pre-check
+    cmds:
+      - |
+        set -euo pipefail
+
+        OMV_SERVER_IP="${OMV_SERVER_IP:-192.168.30.20}"
+
+        if [ -z "${OMV_CIFS_USERNAME:-}" ]; then
+          read -r -p 'Enter OMV CIFS username [omvuser]: ' OMV_CIFS_USERNAME
+          OMV_CIFS_USERNAME="${OMV_CIFS_USERNAME:-omvuser}"
+        fi
+
+        if [ -z "${OMV_CIFS_PASSWORD:-}" ]; then
+          read -r -s -p "Enter OMV CIFS password for ${OMV_CIFS_USERNAME}@${OMV_SERVER_IP}: " OMV_CIFS_PASSWORD
+          echo ''
+        fi
+
+        export OMV_SERVER_IP
+        export OMV_CIFS_USERNAME
+        export OMV_CIFS_PASSWORD
+
+        echo 'Running pre-check...'
+        ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+          task ansible:network-mounts:check
+
+        echo ''
+        echo 'Applying changes...'
+        ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+          task ansible:network-mounts:manage
+
+  mount-servers:
+    desc: Alias for mounting OMV/CIFS network drives on Plex servers only
+    cmds:
+      - task: network-mounts:manage

@@ -1,0 +1,61 @@
+---
+# ==============================================================================
+# File: ansible/roles/linux_ssh_access/defaults/main.yml
+# Purpose:
+#   Defaults for the homelab Linux access-governance role.
+# Notes:
+#   - The role remains backwards-compatible with the previous SSH-key workflow.
+#   - By default it manages only its own marked authorized_keys block and does
+#     not remove unrelated/manual keys.
+# ==============================================================================
+
+linux_ssh_access_key_path: "{{ lookup('env', 'SSH_KEY_PATH') | default(lookup('env', 'HOME') ~ '/.ssh/homelab_ed25519', true) }}"
+linux_ssh_access_key_type: "ed25519"
+linux_ssh_access_key_comment: "{{ lookup('env', 'GIT_USER_EMAIL') | default('homelab-control@local', true) }}"
+linux_ssh_access_key_passphrase: ""
+
+linux_ssh_access_remote_user: "{{ ansible_user | default(ansible_facts['user_id'] | default('root')) }}"
+linux_ssh_access_remote_home: ""
+linux_ssh_access_remote_ssh_dir: "{{ (linux_ssh_access_effective_remote_home | default(linux_ssh_access_remote_home, true)) }}/.ssh"
+linux_ssh_access_remote_authorized_keys: "{{ linux_ssh_access_remote_ssh_dir }}/authorized_keys"
+linux_ssh_access_remote_authorized_keys_owner: "{{ linux_ssh_access_remote_user }}"
+
+linux_ssh_access_manage_known_hosts: true
+linux_ssh_access_known_hosts_file: "{{ lookup('env', 'SSH_KNOWN_HOSTS_FILE') | default(lookup('env', 'HOME') ~ '/.ssh/known_hosts', true) }}"
+linux_ssh_access_known_hosts_timeout: 5
+
+linux_ssh_access_manage_authorized_keys: true
+linux_ssh_access_managed_block_name: "HOMELAB MANAGED SSH ACCESS"
+linux_ssh_access_extra_public_keys: []
+linux_ssh_access_key_registry: []
+linux_ssh_access_remove_expired_keys: true
+linux_ssh_access_remove_legacy_managed_lines: true
+linux_ssh_access_legacy_comment_prefixes:
+  - "homelab-managed"
+  - "homelab-control"
+
+# Set this to true only when you want this role to own the entire authorized_keys
+# file for the target account. The safe default is false.
+linux_ssh_access_exclusive_authorized_keys: false
+
+# Audit controls. Unknown keys are reported but not removed unless exclusive mode
+# is enabled.
+linux_access_governance_audit_enabled: true
+linux_access_governance_warn_unknown_keys: true
+linux_access_governance_audit_root: "{{ lookup('env', 'ACCESS_GOVERNANCE_AUDIT_ROOT') | default(playbook_dir ~ '/../../state/audit/access-governance', true) }}"
+
+# Optional local account governance. Example:
+# linux_access_governance_users:
+#   - name: admin
+#     state: present
+#     groups: [sudo]
+#     shell: /bin/bash
+#     sudo: true
+#     sudo_nopassword: false
+#     ssh_keys:
+#       - key: "ssh-ed25519 AAAA... admin-laptop"
+#         comment: "admin-laptop"
+#         expires: "2026-12-31"
+linux_access_governance_manage_users: true
+linux_access_governance_manage_sudo: true
+linux_access_governance_users: []

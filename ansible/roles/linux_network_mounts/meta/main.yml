@@ -1,0 +1,20 @@
+---
+# ==============================================================================
+# File: ansible/roles/linux_network_mounts/meta/main.yml
+# Purpose:
+#   Metadata for the Linux network mounts role.
+# ==============================================================================
+
+galaxy_info:
+  role_name: linux_network_mounts
+  author: homelab
+  description: Manage CIFS/NFS-style network mounts for Linux VMs and LXCs.
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: Debian
+      versions: ['all']
+    - name: Ubuntu
+      versions: ['all']
+
+dependencies: []

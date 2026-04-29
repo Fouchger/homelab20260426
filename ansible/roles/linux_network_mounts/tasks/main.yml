@@ -1,0 +1,196 @@
+---
+# ==============================================================================
+# File: ansible/roles/linux_network_mounts/tasks/main.yml
+# Purpose:
+#   Install network filesystem tooling, create secure credential files, create
+#   mount points, manage fstab entries, and mount configured network shares.
+# Notes:
+#   - Designed for Linux VMs and LXCs with working SSH access from the control node.
+#   - Unprivileged LXCs may need host-side CIFS/NFS support or container features.
+# ==============================================================================
+
+- name: Refuse unsupported targets
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] is defined
+      - ansible_facts['system'] == 'Linux'
+    fail_msg: "linux_network_mounts only supports Linux targets."
+
+- name: Stop when network mounts are disabled
+  ansible.builtin.meta: end_host
+  when: not (linux_network_mounts_enabled | bool)
+
+- name: Validate share definitions
+  ansible.builtin.assert:
+    that:
+      - linux_network_mounts_shares is iterable
+      - item.path is defined
+      - item.path | length > 0
+      - item.src is defined or item.share is defined
+    fail_msg: "Each network mount needs path plus either src or share."
+  loop: "{{ linux_network_mounts_shares }}"
+  loop_control:
+    label: "{{ item.name | default(item.path | default('network-share')) }}"
+
+- name: Validate CIFS credentials when CIFS shares are configured
+  ansible.builtin.assert:
+    that:
+      - linux_network_mounts_cifs_username | length > 0
+      - linux_network_mounts_cifs_password | length > 0
+    fail_msg: >-
+      CIFS mounts are configured but OMV_CIFS_USERNAME or OMV_CIFS_PASSWORD is empty.
+      Export these environment variables, or override linux_network_mounts_cifs_username
+      and linux_network_mounts_cifs_password with Ansible vars.
+  when: >-
+    linux_network_mounts_shares
+    | selectattr('fstype', 'defined')
+    | selectattr('fstype', 'equalto', 'cifs')
+    | list
+    | length > 0
+    or
+    linux_network_mounts_shares
+    | selectattr('fstype', 'undefined')
+    | list
+    | length > 0
+
+- name: Install CIFS support when needed
+  ansible.builtin.apt:
+    name: "{{ linux_network_mounts_cifs_package_name }}"
+    state: present
+    update_cache: true
+  when:
+    - linux_network_mounts_install_packages | bool
+    - >-
+      linux_network_mounts_shares
+      | selectattr('fstype', 'defined')
+      | selectattr('fstype', 'equalto', 'cifs')
+      | list
+      | length > 0
+      or
+      linux_network_mounts_shares
+      | selectattr('fstype', 'undefined')
+      | list
+      | length > 0
+
+- name: Install NFS support when needed
+  ansible.builtin.apt:
+    name: "{{ linux_network_mounts_nfs_package_name }}"
+    state: present
+    update_cache: true
+  when:
+    - linux_network_mounts_install_packages | bool
+    - >-
+      linux_network_mounts_shares
+      | selectattr('fstype', 'defined')
+      | selectattr('fstype', 'in', ['nfs', 'nfs4'])
+      | list
+      | length > 0
+
+- name: Ensure CIFS credentials directory exists
+  ansible.builtin.file:
+    path: "{{ linux_network_mounts_credentials_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when: >-
+    linux_network_mounts_shares
+    | selectattr('fstype', 'defined')
+    | selectattr('fstype', 'equalto', 'cifs')
+    | list
+    | length > 0
+    or
+    linux_network_mounts_shares
+    | selectattr('fstype', 'undefined')
+    | list
+    | length > 0
+
+- name: Write CIFS credentials file
+  ansible.builtin.copy:
+    dest: "{{ linux_network_mounts_credentials_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+    content: |-
+      username={{ linux_network_mounts_cifs_username }}
+      password={{ linux_network_mounts_cifs_password }}
+      {% if linux_network_mounts_cifs_domain | length > 0 %}
+      domain={{ linux_network_mounts_cifs_domain }}
+      {% endif %}
+  no_log: true
+  when: >-
+    linux_network_mounts_shares
+    | selectattr('fstype', 'defined')
+    | selectattr('fstype', 'equalto', 'cifs')
+    | list
+    | length > 0
+    or
+    linux_network_mounts_shares
+    | selectattr('fstype', 'undefined')
+    | list
+    | length > 0
+
+- name: Ensure mount points exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(linux_network_mounts_default_owner) }}"
+    group: "{{ item.group | default(linux_network_mounts_default_group) }}"
+    mode: "{{ item.mount_mode | default(linux_network_mounts_default_mount_mode) }}"
+  loop: "{{ linux_network_mounts_shares }}"
+  loop_control:
+    label: "{{ item.name | default(item.path) }} -> {{ item.path }}"
+
+- name: Manage network mount entries
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src | default('//' ~ (item.server | default(linux_network_mounts_omv_host)) ~ '/' ~ item.share) }}"
+    fstype: "{{ item.fstype | default(linux_network_mounts_default_fstype) }}"
+    opts: "{{ (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) | join(',') if (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) is iterable and (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) is not string else (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) }}"
+    dump: "{{ item.dump | default('0') }}"
+    passno: "{{ item.passno | default('0') }}"
+    state: "{{ item.state | default(linux_network_mounts_default_state) }}"
+  loop: "{{ linux_network_mounts_shares }}"
+  loop_control:
+    label: "{{ item.name | default(item.path) }}"
+  register: linux_network_mounts_result
+  when: linux_network_mounts_manage_mounts | bool
+
+- name: Reload systemd when mount units changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - ansible_facts['service_mgr'] | default('') == 'systemd'
+    - linux_network_mounts_result is changed
+
+- name: Verify configured network mounts
+  ansible.builtin.command:
+    cmd: "findmnt --target {{ item.path | quote }} --noheadings --output SOURCE,FSTYPE,TARGET"
+  register: linux_network_mounts_findmnt
+  changed_when: false
+  failed_when: false
+  loop: "{{ linux_network_mounts_shares }}"
+  loop_control:
+    label: "{{ item.name | default(item.path) }}"
+  when: linux_network_mounts_manage_mounts | bool
+
+- name: Report network mount verification
+  ansible.builtin.debug:
+    msg: "{{ item.item.name | default(item.item.path) }}: {{ item.stdout | default('not mounted') }}"
+  loop: "{{ linux_network_mounts_findmnt.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default(item.item.path) }}"
+
+- name: Fail clearly when mounts did not come online
+  ansible.builtin.fail:
+    msg: >-
+      Network mount {{ item.item.name | default(item.item.path) }} is not mounted at {{ item.item.path }}.
+      On unprivileged LXCs, enable the required container features or mount the share on the Proxmox host and bind-mount it into the container.
+  loop: "{{ linux_network_mounts_findmnt.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default(item.item.path) }}"
+  when:
+    - linux_network_mounts_fail_on_mount_error | bool
+    - item.rc is defined
+    - item.rc != 0
+    - item.item.state | default(linux_network_mounts_default_state) in ['mounted', 'remounted']

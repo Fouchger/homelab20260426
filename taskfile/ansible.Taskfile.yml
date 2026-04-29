@@ -20,6 +20,8 @@ vars:
   ANSIBLE_COLLECTION_REQUIREMENTS_FILE: '{{.ROOT_DIR}}/ansible/collections/requirements.yml'
   ANSIBLE_INVENTORY_FILE: '{{.ROOT_DIR}}/state/ansible/inventory.yml'
   ANSIBLE_VENV_DIR: '{{.ROOT_DIR}}/state/venv/ansible'
+  ANSIBLE_BIN: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible'
+  ANSIBLE_INVENTORY_BIN: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible-inventory'
   ANSIBLE_PLAYBOOK: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible-playbook'
   ANSIBLE_GALAXY: '{{.ROOT_DIR}}/state/venv/ansible/bin/ansible-galaxy'
   ANSIBLE_PYTHON: '{{.ROOT_DIR}}/state/venv/ansible/bin/python'
@@ -192,3 +194,106 @@ tasks:
           exit 1
         fi
         cat '{{.ANSIBLE_INVENTORY_FILE}}'
+
+  ssh-access:manage:
+    desc: Run access governance for inventory hosts, including Linux SSH/users/sudo/audit and router reachability
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: ssh-access:manage
+        # Purpose:
+        #   Process inventory hosts one at a time. For each host, print the
+        #   server name, address, user, connection type, result, and next action.
+        #   Linux hosts are governed for users, SSH, sudo, and audit. Network
+        #   devices are connectivity-tested and summarised.
+        # =============================================================================
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+        ANSIBLE_CONFIG_FILE='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_INVENTORY_FILE='{{.ANSIBLE_INVENTORY_FILE}}' \
+        ANSIBLE_BIN='{{.ANSIBLE_BIN}}' \
+        ANSIBLE_INVENTORY_BIN='{{.ANSIBLE_INVENTORY_BIN}}' \
+        ANSIBLE_PLAYBOOK='{{.ANSIBLE_PLAYBOOK}}' \
+        ANSIBLE_PYTHON='{{.ANSIBLE_PYTHON}}' \
+        SSH_KEY_PATH='{{.SSH_KEY_PATH}}' \
+        SSH_KNOWN_HOSTS_FILE='{{.SSH_KNOWN_HOSTS_FILE}}' \
+          '{{.ROOT_DIR}}/scripts/lib/manage-linux-ssh-access.sh'
+
+  ssh-access:bootstrap-password:
+    desc: Alias for ssh-access:manage; prompts per Linux host only when password bootstrap is needed
+    deps: [tools:check]
+    cmds:
+      - task: ssh-access:manage
+
+  ssh-access:check:
+    desc: Check access governance per host without applying Linux changes or prompting for passwords
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: ssh-access:check
+        # Purpose:
+        #   Preview access governance per host. Linux hosts without key access are
+        #   reported clearly and skipped because check mode does not prompt.
+        #   Network devices are still tested for reachability.
+        # =============================================================================
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+        ANSIBLE_CONFIG_FILE='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_INVENTORY_FILE='{{.ANSIBLE_INVENTORY_FILE}}' \
+        ANSIBLE_BIN='{{.ANSIBLE_BIN}}' \
+        ANSIBLE_INVENTORY_BIN='{{.ANSIBLE_INVENTORY_BIN}}' \
+        ANSIBLE_PLAYBOOK='{{.ANSIBLE_PLAYBOOK}}' \
+        ANSIBLE_PYTHON='{{.ANSIBLE_PYTHON}}' \
+        SSH_KEY_PATH='{{.SSH_KEY_PATH}}' \
+        SSH_KNOWN_HOSTS_FILE='{{.SSH_KNOWN_HOSTS_FILE}}' \
+        ANSIBLE_SSH_ACCESS_CHECK_MODE='true' \
+          '{{.ROOT_DIR}}/scripts/lib/manage-linux-ssh-access.sh'
+
+  network-mounts:manage:
+    desc: Mount configured network shares on Linux VMs and LXCs, host by host
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: network-mounts:manage
+        # Purpose:
+        #   Process inventory hosts one at a time. Linux hosts are checked for SSH
+        #   key access, then configured with the network mounts role. Routers and
+        #   other network devices are reported as skipped.
+        # =============================================================================
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+        ANSIBLE_CONFIG_FILE='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_INVENTORY_FILE='{{.ANSIBLE_INVENTORY_FILE}}' \
+        ANSIBLE_BIN='{{.ANSIBLE_BIN}}' \
+        ANSIBLE_INVENTORY_BIN='{{.ANSIBLE_INVENTORY_BIN}}' \
+        ANSIBLE_PLAYBOOK='{{.ANSIBLE_PLAYBOOK}}' \
+        ANSIBLE_PYTHON='{{.ANSIBLE_PYTHON}}' \
+        SSH_KEY_PATH='{{.SSH_KEY_PATH}}' \
+        SSH_KNOWN_HOSTS_FILE='{{.SSH_KNOWN_HOSTS_FILE}}' \
+          '{{.ROOT_DIR}}/scripts/lib/manage-network-mounts.sh'
+
+  network-mounts:check:
+    desc: Preview configured network shares on Linux VMs and LXCs, host by host
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: network-mounts:check
+        # Purpose:
+        #   Run network mount management in Ansible check mode where possible.
+        # =============================================================================
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+        ANSIBLE_CONFIG_FILE='{{.ANSIBLE_CONFIG_FILE}}' \
+        ANSIBLE_INVENTORY_FILE='{{.ANSIBLE_INVENTORY_FILE}}' \
+        ANSIBLE_BIN='{{.ANSIBLE_BIN}}' \
+        ANSIBLE_INVENTORY_BIN='{{.ANSIBLE_INVENTORY_BIN}}' \
+        ANSIBLE_PLAYBOOK='{{.ANSIBLE_PLAYBOOK}}' \
+        ANSIBLE_PYTHON='{{.ANSIBLE_PYTHON}}' \
+        SSH_KEY_PATH='{{.SSH_KEY_PATH}}' \
+        SSH_KNOWN_HOSTS_FILE='{{.SSH_KNOWN_HOSTS_FILE}}' \
+        ANSIBLE_NETWORK_MOUNTS_CHECK_MODE='true' \
+          '{{.ROOT_DIR}}/scripts/lib/manage-network-mounts.sh'

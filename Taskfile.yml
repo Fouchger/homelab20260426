@@ -60,6 +60,7 @@ vars:
 
 includes:
   ansible: ./taskfile/ansible.Taskfile.yml
+  plex: ./plex.Taskfile.yml
   mikrotik: ./taskfile/mikrotik.Taskfile.yml
   git_github: ./taskfile/git_github.Taskfile.yml
   ssh: ./taskfile/ssh.Taskfile.yml
@@ -99,6 +100,7 @@ tasks:
       - task: mikrotik:ssh-copy-id
       - task: mikrotik:backup:run
       - task: mikrotik:plan:run
+      - task: task ansible:ssh-access:manage
       - |
         # Print Header
         set -euo pipefail

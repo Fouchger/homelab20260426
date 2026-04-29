@@ -1,0 +1,49 @@
+---
+# ==============================================================================
+# File:taskfile/ plex.Taskfile.yml
+# Purpose:
+#   Plex-specific automation tasks.
+# ==============================================================================
+
+version: '3'
+
+tasks:
+  default:
+    desc: Show available homelab tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available secrets tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  network-mounts:check:
+    desc: Preview OMV/CIFS network mounts on Plex servers only
+    cmds:
+      - |
+        ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+          task ansible:network-mounts:check
+
+ network-mounts:manage:
+  cmds:
+    - |
+      echo "Validating configuration..."
+      ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+        ansible-playbook ansible/playbooks/linux_network_mounts.yml \
+        -i state/ansible/inventory.yml \
+        --check
+
+    - |
+      echo ""
+      read -rp "Proceed with mount changes? (y/N): " confirm
+      if [ "$confirm" != "y" ]; then
+        echo "Aborted."
+        exit 1
+      fi
+
+    - |
+      echo "Applying changes..."
+      ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+        ansible-playbook ansible/playbooks/linux_network_mounts.yml \
+        -i state/ansible/inventory.yml

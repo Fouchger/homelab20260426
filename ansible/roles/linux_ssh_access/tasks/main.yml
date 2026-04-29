@@ -1,0 +1,354 @@
+---
+# ==============================================================================
+# File: ansible/roles/linux_ssh_access/tasks/main.yml
+# Purpose:
+#   Manage Linux access governance: users, SSH authorised keys, sudo policy,
+#   known_hosts trust, key expiry pruning, and audit reporting.
+# Notes:
+#   - First-time password bootstrap still requires a valid SSH password.
+#   - Cleanup is scoped to the role-managed block and recognised legacy homelab
+#     comments unless exclusive management is explicitly enabled.
+# ==============================================================================
+
+- name: Refuse unsupported targets
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] is defined
+      - ansible_facts['system'] == 'Linux'
+    fail_msg: "linux_ssh_access only supports Linux targets."
+
+- name: Ensure local SSH key directory exists on control node
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_key_path | dirname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+- name: Generate local homelab SSH keypair when missing
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -t {{ linux_ssh_access_key_type }}
+      -C {{ linux_ssh_access_key_comment | quote }}
+      -f {{ linux_ssh_access_key_path | quote }}
+      -N {{ linux_ssh_access_key_passphrase | quote }}
+    creates: "{{ linux_ssh_access_key_path }}"
+  delegate_to: localhost
+  run_once: true
+  become: false
+  no_log: "{{ linux_ssh_access_key_passphrase | length > 0 }}"
+
+- name: Secure local private key permissions
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_key_path }}"
+    mode: '0600'
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+- name: Secure local public key permissions
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_key_path }}.pub"
+    mode: '0644'
+  delegate_to: localhost
+  run_once: true
+  become: false
+
+- name: Read local homelab public key
+  ansible.builtin.set_fact:
+    linux_ssh_access_control_public_key: "{{ lookup('ansible.builtin.file', linux_ssh_access_key_path ~ '.pub') }}"
+
+- name: Write temporary key-registry payload on control node
+  ansible.builtin.tempfile:
+    state: file
+    suffix: access-governance-keys.json
+  register: linux_ssh_access_key_payload_file
+  delegate_to: localhost
+  become: false
+
+- name: Populate temporary key-registry payload
+  ansible.builtin.copy:
+    dest: "{{ linux_ssh_access_key_payload_file.path }}"
+    mode: '0600'
+    content: "{{ linux_ssh_access_key_payload | to_nice_json }}\n"
+  vars:
+    linux_ssh_access_key_payload:
+      today: "{{ lookup('pipe', 'date +%F') }}"
+      control_public_key: "{{ linux_ssh_access_control_public_key }}"
+      control_key_comment: "{{ linux_ssh_access_key_comment }}"
+      key_registry: "{{ linux_ssh_access_key_registry }}"
+      extra_public_keys: "{{ linux_ssh_access_extra_public_keys }}"
+  delegate_to: localhost
+  become: false
+
+- name: Render active managed SSH key set
+  ansible.builtin.command:
+    cmd: >-
+      {{ ansible_playbook_python | quote }}
+      {{ role_path }}/files/render-managed-keys.py
+      {{ linux_ssh_access_key_payload_file.path | quote }}
+  register: linux_ssh_access_rendered_keys_raw
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Remove temporary key-registry payload
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_key_payload_file.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+
+- name: Set rendered SSH key governance facts
+  ansible.builtin.set_fact:
+    linux_ssh_access_rendered_keys: "{{ linux_ssh_access_rendered_keys_raw.stdout | from_json }}"
+    linux_ssh_access_authorized_key_block: "{{ (linux_ssh_access_rendered_keys_raw.stdout | from_json).block }}"
+    linux_ssh_access_expected_key_identities: "{{ (linux_ssh_access_rendered_keys_raw.stdout | from_json).active_key_identities }}"
+
+- name: Report expired or absent managed SSH keys
+  ansible.builtin.debug:
+    msg:
+      expired: "{{ linux_ssh_access_rendered_keys.expired }}"
+      absent: "{{ linux_ssh_access_rendered_keys.absent }}"
+  when:
+    - linux_access_governance_audit_enabled | bool
+    - (linux_ssh_access_rendered_keys.expired | length > 0) or (linux_ssh_access_rendered_keys.absent | length > 0)
+
+- name: Ensure control-node known_hosts directory exists
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_known_hosts_file | dirname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when: linux_ssh_access_manage_known_hosts | bool
+
+- name: Scan inventory host SSH host key from control node
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keyscan -T {{ linux_ssh_access_known_hosts_timeout }}
+      -p {{ ansible_port | default(22) }}
+      {{ ansible_host | default(inventory_hostname) | quote }}
+  register: linux_ssh_access_host_keyscan
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  become: false
+  when: linux_ssh_access_manage_known_hosts | bool
+
+- name: Trust inventory host key on control node
+  ansible.builtin.known_hosts:
+    path: "{{ linux_ssh_access_known_hosts_file }}"
+    name: "{{ ('[' ~ (ansible_host | default(inventory_hostname)) ~ ']:' ~ (ansible_port | default(22) | string)) if (ansible_port | default(22) | int) != 22 else (ansible_host | default(inventory_hostname)) }}"
+    key: "{{ item }}"
+    state: present
+  loop: "{{ linux_ssh_access_host_keyscan.stdout_lines | default([]) }}"
+  delegate_to: localhost
+  become: false
+  when:
+    - linux_ssh_access_manage_known_hosts | bool
+    - linux_ssh_access_host_keyscan.rc == 0
+    - linux_ssh_access_host_keyscan.stdout | length > 0
+
+- name: Manage configured local Linux users
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    state: "{{ item.state | default('present') }}"
+    shell: "{{ item.shell | default(omit) }}"
+    groups: "{{ item.groups | default(omit) }}"
+    append: "{{ item.append | default(true) }}"
+    create_home: "{{ item.create_home | default(true) }}"
+  loop: "{{ linux_access_governance_users }}"
+  when:
+    - linux_access_governance_manage_users | bool
+    - item.name is defined
+
+- name: Manage sudoers policy for configured users
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-homelab-{{ item.name }}"
+    content: |
+      # ==============================================================================
+      # File: /etc/sudoers.d/90-homelab-{{ item.name }}
+      # Purpose:
+      #   Homelab managed sudo policy for {{ item.name }}.
+      # ==============================================================================
+      {{ item.name }} ALL=(ALL) {{ 'NOPASSWD: ' if (item.sudo_nopassword | default(false) | bool) else '' }}ALL
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  loop: "{{ linux_access_governance_users }}"
+  when:
+    - linux_access_governance_manage_users | bool
+    - linux_access_governance_manage_sudo | bool
+    - item.name is defined
+    - item.sudo | default(false) | bool
+
+- name: Remove sudoers policy for users without sudo governance
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/90-homelab-{{ item.name }}"
+    state: absent
+  loop: "{{ linux_access_governance_users }}"
+  when:
+    - linux_access_governance_manage_users | bool
+    - linux_access_governance_manage_sudo | bool
+    - item.name is defined
+    - not (item.sudo | default(false) | bool)
+
+- name: Resolve target account home directory
+  ansible.builtin.command:
+    cmd: "getent passwd {{ linux_ssh_access_remote_user | quote }}"
+  register: linux_ssh_access_passwd_entry
+  changed_when: false
+  when:
+    - linux_ssh_access_manage_authorized_keys | bool
+    - linux_ssh_access_remote_home | length == 0
+
+- name: Set effective target account home directory
+  ansible.builtin.set_fact:
+    linux_ssh_access_effective_remote_home: >-
+      {{ linux_ssh_access_remote_home if linux_ssh_access_remote_home | length > 0 else (linux_ssh_access_passwd_entry.stdout.split(':')[5]) }}
+  when: linux_ssh_access_manage_authorized_keys | bool
+
+- name: Ensure remote .ssh directory exists
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_remote_ssh_dir }}"
+    state: directory
+    owner: "{{ linux_ssh_access_remote_authorized_keys_owner }}"
+    mode: '0700'
+  when: linux_ssh_access_manage_authorized_keys | bool
+
+- name: Ensure remote authorized_keys exists
+  ansible.builtin.file:
+    path: "{{ linux_ssh_access_remote_authorized_keys }}"
+    state: touch
+    owner: "{{ linux_ssh_access_remote_authorized_keys_owner }}"
+    mode: '0600'
+    modification_time: preserve
+    access_time: preserve
+  when: linux_ssh_access_manage_authorized_keys | bool
+
+- name: Remove legacy stale homelab-managed key lines
+  ansible.builtin.lineinfile:
+    path: "{{ linux_ssh_access_remote_authorized_keys }}"
+    regexp: "^.*(?:{{ linux_ssh_access_legacy_comment_prefixes | map('regex_escape') | join('|') }}).*$"
+    state: absent
+  when:
+    - linux_ssh_access_manage_authorized_keys | bool
+    - linux_ssh_access_remove_legacy_managed_lines | bool
+    - not linux_ssh_access_exclusive_authorized_keys | bool
+    - linux_ssh_access_legacy_comment_prefixes | length > 0
+
+- name: Manage homelab authorized key block safely
+  ansible.builtin.blockinfile:
+    path: "{{ linux_ssh_access_remote_authorized_keys }}"
+    marker: "# {mark} {{ linux_ssh_access_managed_block_name }}"
+    block: "{{ linux_ssh_access_authorized_key_block }}"
+    create: true
+    owner: "{{ linux_ssh_access_remote_authorized_keys_owner }}"
+    mode: '0600'
+  when:
+    - linux_ssh_access_manage_authorized_keys | bool
+    - not linux_ssh_access_exclusive_authorized_keys | bool
+
+- name: Exclusively manage remote authorized_keys when explicitly enabled
+  ansible.builtin.copy:
+    dest: "{{ linux_ssh_access_remote_authorized_keys }}"
+    content: |
+      # BEGIN {{ linux_ssh_access_managed_block_name }}
+      {{ linux_ssh_access_authorized_key_block }}
+      # END {{ linux_ssh_access_managed_block_name }}
+    owner: "{{ linux_ssh_access_remote_authorized_keys_owner }}"
+    mode: '0600'
+  when:
+    - linux_ssh_access_manage_authorized_keys | bool
+    - linux_ssh_access_exclusive_authorized_keys | bool
+
+- name: Audit remote authorized_keys for unknown unmanaged keys
+  ansible.builtin.shell: |
+    set -euo pipefail
+    AUTH_FILE={{ linux_ssh_access_remote_authorized_keys | quote }} EXPECTED_JSON={{ linux_ssh_access_expected_key_identities | to_json | quote }} MANAGED_BLOCK={{ linux_ssh_access_managed_block_name | quote }} python3 - <<'PY'
+    import json
+    import os
+    from pathlib import Path
+
+    auth_file = Path(os.environ['AUTH_FILE'])
+    expected = set(json.loads(os.environ['EXPECTED_JSON']))
+    marker = os.environ['MANAGED_BLOCK']
+    unknown = []
+    managed = False
+    total_key_lines = 0
+    if auth_file.exists():
+        for raw_line in auth_file.read_text(encoding='utf-8', errors='replace').splitlines():
+            line = raw_line.strip()
+            if line == f'# BEGIN {marker}':
+                managed = True
+                continue
+            if line == f'# END {marker}':
+                managed = False
+                continue
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) < 2 or not parts[0].startswith(('ssh-', 'ecdsa-')):
+                continue
+            total_key_lines += 1
+            identity = ' '.join(parts[:2])
+            if not managed and identity not in expected:
+                unknown.append(line)
+    print(json.dumps({'unknown_keys': unknown, 'unknown_count': len(unknown), 'total_key_lines': total_key_lines}, sort_keys=True))
+    PY
+  args:
+    executable: /bin/bash
+  register: linux_access_governance_authorized_keys_audit_raw
+  changed_when: false
+  when:
+    - linux_access_governance_audit_enabled | bool
+    - linux_ssh_access_manage_authorized_keys | bool
+
+- name: Set authorized_keys audit facts
+  ansible.builtin.set_fact:
+    linux_access_governance_authorized_keys_audit: "{{ linux_access_governance_authorized_keys_audit_raw.stdout | from_json }}"
+  when:
+    - linux_access_governance_audit_enabled | bool
+    - linux_ssh_access_manage_authorized_keys | bool
+
+- name: Warn about unknown unmanaged SSH keys
+  ansible.builtin.debug:
+    msg: "Unknown unmanaged SSH keys detected for {{ inventory_hostname }}: {{ linux_access_governance_authorized_keys_audit.unknown_keys }}"
+  when:
+    - linux_access_governance_audit_enabled | bool
+    - linux_access_governance_warn_unknown_keys | bool
+    - linux_access_governance_authorized_keys_audit.unknown_count | default(0) | int > 0
+
+- name: Ensure local access-governance audit directory exists
+  ansible.builtin.file:
+    path: "{{ linux_access_governance_audit_root }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when: linux_access_governance_audit_enabled | bool
+
+- name: Write local access-governance audit record
+  ansible.builtin.copy:
+    dest: "{{ linux_access_governance_audit_root }}/{{ inventory_hostname }}.json"
+    mode: '0600'
+    content: |
+      {{ {
+        'host': inventory_hostname,
+        'address': ansible_host | default(inventory_hostname),
+        'user': linux_ssh_access_remote_user,
+        'system': ansible_facts['system'],
+        'distribution': ansible_facts['distribution'] | default('unknown'),
+        'managed_key_count': linux_ssh_access_rendered_keys.active_count | default(0),
+        'expired_managed_keys': linux_ssh_access_rendered_keys.expired | default([]),
+        'absent_managed_keys': linux_ssh_access_rendered_keys.absent | default([]),
+        'unknown_unmanaged_key_count': linux_access_governance_authorized_keys_audit.unknown_count | default(0),
+        'unknown_unmanaged_keys': linux_access_governance_authorized_keys_audit.unknown_keys | default([]),
+        'governed_users': linux_access_governance_users | map(attribute='name') | list,
+      } | to_nice_json }}
+  delegate_to: localhost
+  become: false
+  when: linux_access_governance_audit_enabled | bool

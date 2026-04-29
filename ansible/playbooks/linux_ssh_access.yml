@@ -1,0 +1,20 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/linux_ssh_access.yml
+# Purpose:
+#   Manage Linux access governance for inventory servers: users, SSH keys, sudo,
+#   known_hosts, key expiry pruning, and audit records.
+# Notes:
+#   - Default target excludes MikroTik/network devices because Linux account
+#     governance does not apply to RouterOS.
+#   - The wrapper script still tests router reachability separately for estate
+#     visibility.
+# ==============================================================================
+
+- name: Manage Linux access governance
+  hosts: "{{ lookup('env', 'ANSIBLE_SSH_ACCESS_LIMIT') | default('all:!mikrotik', true) }}"
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: linux_ssh_access
