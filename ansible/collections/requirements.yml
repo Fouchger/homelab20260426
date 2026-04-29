@@ -6,10 +6,8 @@
 # Notes:
 #   - community.routeros provides MikroTik RouterOS modules and plugins.
 #   - ansible.netcommon provides the network_cli connection used over SSH.
-#   - ansible.posix provides the mount module used for Linux filesystems.
 # ==============================================================================
 
 collections:
   - name: ansible.netcommon
   - name: community.routeros
-  - name: ansible.posix

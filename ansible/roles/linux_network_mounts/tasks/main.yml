@@ -151,27 +151,97 @@
     label: "{{ item.item.name | default(item.item.path) }} -> {{ item.item.path }}"
   when: not item.stat.exists
 
-- name: Manage network mount entries
-  ansible.posix.mount:
-    path: "{{ item.path }}"
-    src: "{{ item.src | default('//' ~ (item.server | default(linux_network_mounts_omv_host)) ~ '/' ~ item.share) }}"
-    fstype: "{{ item.fstype | default(linux_network_mounts_default_fstype) }}"
-    opts: "{{ (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) | join(',') if (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) is iterable and (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) is not string else (item.opts | default(linux_network_mounts_default_cifs_options if (item.fstype | default(linux_network_mounts_default_fstype)) == 'cifs' else linux_network_mounts_default_network_options)) }}"
-    dump: "{{ item.dump | default('0') }}"
-    passno: "{{ item.passno | default('0') }}"
-    state: "{{ item.state | default(linux_network_mounts_default_state) }}"
+- name: Build normalised network mount definitions
+  ansible.builtin.set_fact:
+    linux_network_mounts_normalised: "{{ linux_network_mounts_normalised | default([]) + [linux_network_mounts_normalised_item] }}"
+  vars:
+    linux_network_mounts_effective_fstype: "{{ item.fstype | default(linux_network_mounts_default_fstype) }}"
+    linux_network_mounts_effective_opts_raw: >-
+      {{ item.opts | default(linux_network_mounts_default_cifs_options
+      if linux_network_mounts_effective_fstype == 'cifs'
+      else linux_network_mounts_default_network_options) }}
+    linux_network_mounts_effective_opts: >-
+      {{ linux_network_mounts_effective_opts_raw | join(',')
+      if linux_network_mounts_effective_opts_raw is iterable
+      and linux_network_mounts_effective_opts_raw is not string
+      else linux_network_mounts_effective_opts_raw }}
+    linux_network_mounts_normalised_item:
+      name: "{{ item.name | default(item.path) }}"
+      path: "{{ item.path }}"
+      src: "{{ item.src | default('//' ~ (item.server | default(linux_network_mounts_omv_host)) ~ '/' ~ item.share) }}"
+      fstype: "{{ linux_network_mounts_effective_fstype }}"
+      opts: "{{ linux_network_mounts_effective_opts }}"
+      dump: "{{ item.dump | default('0') }}"
+      passno: "{{ item.passno | default('0') }}"
+      state: "{{ item.state | default(linux_network_mounts_default_state) }}"
   loop: "{{ linux_network_mounts_shares }}"
   loop_control:
     label: "{{ item.name | default(item.path) }}"
-  register: linux_network_mounts_result
+
+- name: Manage network mount entries in fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^\S+\s+{{ item.path | regex_escape }}\s+'
+    line: "{{ item.src }} {{ item.path }} {{ item.fstype }} {{ item.opts }} {{ item.dump }} {{ item.passno }}"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: true
+    create: true
+    state: "{{ 'absent' if item.state == 'absent' else 'present' }}"
+  loop: "{{ linux_network_mounts_normalised | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: linux_network_mounts_fstab_result
   when: linux_network_mounts_manage_mounts | bool
 
-- name: Reload systemd when mount units changed
+- name: Reload systemd when fstab changed
   ansible.builtin.systemd_service:
     daemon_reload: true
   when:
     - ansible_facts['service_mgr'] | default('') == 'systemd'
-    - linux_network_mounts_result is changed
+    - linux_network_mounts_fstab_result is changed
+
+- name: Check current network mount state before mounting
+  ansible.builtin.command:
+    cmd: "findmnt --target {{ item.path | quote }} --noheadings --output SOURCE,FSTYPE,TARGET"
+  register: linux_network_mounts_pre_findmnt
+  changed_when: false
+  failed_when: false
+  loop: "{{ linux_network_mounts_normalised | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - linux_network_mounts_manage_mounts | bool
+    - item.state in ['mounted', 'remounted']
+
+- name: Mount network shares that are not already mounted
+  ansible.builtin.command:
+    cmd: "mount {{ item.item.path | quote }}"
+  register: linux_network_mounts_mount_command_result
+  changed_when: true
+  loop: "{{ linux_network_mounts_pre_findmnt.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - linux_network_mounts_manage_mounts | bool
+    - not ansible_check_mode
+    - item.rc is defined
+    - item.rc != 0
+
+- name: Unmount network shares requested as unmounted
+  ansible.builtin.command:
+    cmd: "umount {{ item.path | quote }}"
+  register: linux_network_mounts_umount_command_result
+  changed_when: true
+  failed_when: false
+  loop: "{{ linux_network_mounts_normalised | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - linux_network_mounts_manage_mounts | bool
+    - not ansible_check_mode
+    - item.state == 'unmounted'
 
 - name: Verify configured network mounts
   ansible.builtin.command:
