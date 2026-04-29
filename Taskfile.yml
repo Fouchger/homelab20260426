@@ -101,6 +101,8 @@ tasks:
       - task: mikrotik:backup:run
       - task: mikrotik:plan:run
       - task: task ansible:ssh-access:manage
+      - task: plex:network-mounts:manage
+
       - |
         # Print Header
         set -euo pipefail

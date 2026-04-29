@@ -130,16 +130,26 @@
     | list
     | length > 0
 
-- name: Ensure mount points exist
-  ansible.builtin.file:
+- name: Check mount point paths
+  ansible.builtin.stat:
     path: "{{ item.path }}"
-    state: directory
-    owner: "{{ item.owner | default(linux_network_mounts_default_owner) }}"
-    group: "{{ item.group | default(linux_network_mounts_default_group) }}"
-    mode: "{{ item.mount_mode | default(linux_network_mounts_default_mount_mode) }}"
+  register: linux_network_mounts_mountpoint_stat
+  changed_when: false
   loop: "{{ linux_network_mounts_shares }}"
   loop_control:
     label: "{{ item.name | default(item.path) }} -> {{ item.path }}"
+
+- name: Create mount points only when missing
+  ansible.builtin.file:
+    path: "{{ item.item.path }}"
+    state: directory
+    owner: "{{ item.item.owner | default(linux_network_mounts_default_owner) }}"
+    group: "{{ item.item.group | default(linux_network_mounts_default_group) }}"
+    mode: "{{ item.item.mount_mode | default(linux_network_mounts_default_mount_mode) }}"
+  loop: "{{ linux_network_mounts_mountpoint_stat.results }}"
+  loop_control:
+    label: "{{ item.item.name | default(item.item.path) }} -> {{ item.item.path }}"
+  when: not item.stat.exists
 
 - name: Manage network mount entries
   ansible.posix.mount:

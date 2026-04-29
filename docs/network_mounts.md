@@ -44,13 +44,19 @@ ANSIBLE_NETWORK_MOUNTS_LIMIT=plex01 task ansible:network-mounts:manage
 
 Do not store the SMB password in `/etc/fstab`.
 
-Set credentials before running the task, or leave them unset and the task will prompt interactively for username and password:
+The task reads OMV CIFS settings from:
+
+```text
+state/config/.env
+```
+
+If `OMV_CIFS_USERNAME` or `OMV_CIFS_PASSWORD` is missing, the task prompts once and saves the missing values to `state/config/.env` with mode `0600`.
 
 ```bash
 task ansible:network-mounts:manage
 ```
 
-For non-interactive runs, export credentials first:
+For non-interactive runs, export credentials first. The task will still persist missing values to `state/config/.env` for future runs.
 
 ```bash
 export OMV_SERVER_IP='192.168.30.20'
@@ -66,6 +72,14 @@ The role writes credentials on each target host to:
 ```
 
 with mode `0600`.
+
+For Plex-only mounts, use:
+
+```bash
+task plex:network-mounts:manage
+```
+
+This runs a single idempotent apply pass against the `plex` inventory group. It does not run a pre-check and then a second apply.
 
 ## Default shares
 

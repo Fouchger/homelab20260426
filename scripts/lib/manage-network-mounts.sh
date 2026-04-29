@@ -47,15 +47,60 @@ get_env_file_value() {
   local env_file="${CONFIG_ENV_FILE:-${ROOT_DIR}/state/config/.env}"
 
   if [ -f "$env_file" ]; then
-    grep -E "^${env_key}=" "$env_file" \
-      | tail -n 1 \
-      | cut -d= -f2- \
-      | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//'
+    awk -F= -v key="$env_key" '
+      $1 == key {
+        value = substr($0, index($0, "=") + 1)
+      }
+      END {
+        gsub(/^["\047]|["\047]$/, "", value)
+        print value
+      }
+    ' "$env_file"
+  fi
+}
+
+
+env_file_has_key() {
+  local env_key="$1"
+  local env_file="${CONFIG_ENV_FILE:-${ROOT_DIR}/state/config/.env}"
+
+  [ -f "$env_file" ] && grep -q -E "^${env_key}=" "$env_file"
+}
+
+shell_quote_value() {
+  local raw_value="$1"
+  printf "'%s'" "$(printf '%s' "$raw_value" | sed "s/'/'\\''/g")"
+}
+
+persist_env_value_if_missing() {
+  local env_key="$1"
+  local env_value="$2"
+  local env_file="${CONFIG_ENV_FILE:-${ROOT_DIR}/state/config/.env}"
+  local env_dir
+
+  env_dir="$(dirname "$env_file")"
+  mkdir -p "$env_dir"
+  chmod 700 "$env_dir"
+  touch "$env_file"
+  chmod 600 "$env_file"
+
+  if ! env_file_has_key "$env_key" || [ -z "$(get_env_file_value "$env_key")" ]; then
+    if env_file_has_key "$env_key"; then
+      local tmp_file
+      tmp_file="$(mktemp)"
+      grep -v -E "^${env_key}=" "$env_file" > "$tmp_file"
+      cat "$tmp_file" > "$env_file"
+      rm -f "$tmp_file"
+    fi
+    printf '%s=%s\n' "$env_key" "$(shell_quote_value "$env_value")" >> "$env_file"
   fi
 }
 
 prompt_network_mount_credentials() {
   local default_username
+  local env_file
+
+  env_file="${CONFIG_ENV_FILE:-${ROOT_DIR}/state/config/.env}"
 
   export OMV_SERVER_IP="${OMV_SERVER_IP:-$(get_env_file_value OMV_SERVER_IP)}"
   export OMV_SERVER_IP="${OMV_SERVER_IP:-192.168.30.20}"
@@ -66,7 +111,7 @@ prompt_network_mount_credentials() {
 
   if [ -z "${OMV_CIFS_USERNAME}" ] || [ -z "${OMV_CIFS_PASSWORD}" ]; then
     if [ "${NONINTERACTIVE:-0}" = "1" ] || [ ! -t 0 ]; then
-      echo "OMV CIFS username/password are required. Set OMV_CIFS_USERNAME and OMV_CIFS_PASSWORD, or run interactively." >&2
+      echo "OMV CIFS username/password are required. Set OMV_CIFS_USERNAME and OMV_CIFS_PASSWORD, or run interactively once to save them in ${env_file}." >&2
       exit 1
     fi
   fi
@@ -87,6 +132,15 @@ prompt_network_mount_credentials() {
     echo "OMV CIFS username and password are required." >&2
     exit 1
   fi
+
+  persist_env_value_if_missing OMV_SERVER_IP "$OMV_SERVER_IP"
+  persist_env_value_if_missing OMV_CIFS_USERNAME "$OMV_CIFS_USERNAME"
+  persist_env_value_if_missing OMV_CIFS_PASSWORD "$OMV_CIFS_PASSWORD"
+  if [ -n "${OMV_CIFS_DOMAIN:-}" ]; then
+    persist_env_value_if_missing OMV_CIFS_DOMAIN "$OMV_CIFS_DOMAIN"
+  fi
+
+  echo "OMV CIFS settings are available from ${env_file}."
 }
 
 inventory_hosts() {

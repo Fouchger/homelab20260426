@@ -1,49 +1,45 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
 ---
 # ==============================================================================
-# File:taskfile/ plex.Taskfile.yml
+# File: taskfile/plex.Taskfile.yml
 # Purpose:
-#   Plex-specific automation tasks.
+#   Plex-specific homelab automation tasks.
+# Notes:
+#   - Kept valid for future include use; root Taskfile currently includes ./plex.Taskfile.yml.
 # ==============================================================================
 
 version: '3'
 
+silent: true
+
 tasks:
   default:
-    desc: Show available homelab tasks
+    desc: Show available Plex tasks
     cmds:
       - task: tasklist
 
   tasklist:
-    desc: Show the available secrets tasks
+    desc: Show available Plex tasks
     cmds:
-      - task --taskfile "{{.TASKFILE}}" --list
+      - task --taskfile '{{.TASKFILE}}' --list
 
   network-mounts:check:
     desc: Preview OMV/CIFS network mounts on Plex servers only
     cmds:
       - |
+        set -euo pipefail
         ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
           task ansible:network-mounts:check
 
- network-mounts:manage:
-  cmds:
-    - |
-      echo "Validating configuration..."
-      ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
-        ansible-playbook ansible/playbooks/linux_network_mounts.yml \
-        -i state/ansible/inventory.yml \
-        --check
+  network-mounts:manage:
+    desc: Mount OMV/CIFS network drives on Plex servers only
+    cmds:
+      - |
+        set -euo pipefail
+        ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
+          task ansible:network-mounts:manage
 
-    - |
-      echo ""
-      read -rp "Proceed with mount changes? (y/N): " confirm
-      if [ "$confirm" != "y" ]; then
-        echo "Aborted."
-        exit 1
-      fi
-
-    - |
-      echo "Applying changes..."
-      ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
-        ansible-playbook ansible/playbooks/linux_network_mounts.yml \
-        -i state/ansible/inventory.yml
+  mount-servers:
+    desc: Alias for mounting OMV/CIFS network drives on Plex servers only
+    cmds:
+      - task: network-mounts:manage

@@ -7,6 +7,7 @@
 # Notes:
 #   - Targets only the Ansible inventory group named "plex".
 #   - Network mount tasks are idempotent; existing correct mounts are left alone.
+#   - OMV CIFS settings are read from state/config/.env and prompted/saved when missing.
 # ==============================================================================
 
 version: '3'
@@ -33,33 +34,10 @@ tasks:
           task ansible:network-mounts:check
 
   network-mounts:manage:
-    desc: Mount OMV/CIFS network drives on Plex servers only, with pre-check
+    desc: Mount OMV/CIFS network drives on Plex servers only
     cmds:
       - |
         set -euo pipefail
-
-        OMV_SERVER_IP="${OMV_SERVER_IP:-192.168.30.20}"
-
-        if [ -z "${OMV_CIFS_USERNAME:-}" ]; then
-          read -r -p 'Enter OMV CIFS username [omvuser]: ' OMV_CIFS_USERNAME
-          OMV_CIFS_USERNAME="${OMV_CIFS_USERNAME:-omvuser}"
-        fi
-
-        if [ -z "${OMV_CIFS_PASSWORD:-}" ]; then
-          read -r -s -p "Enter OMV CIFS password for ${OMV_CIFS_USERNAME}@${OMV_SERVER_IP}: " OMV_CIFS_PASSWORD
-          echo ''
-        fi
-
-        export OMV_SERVER_IP
-        export OMV_CIFS_USERNAME
-        export OMV_CIFS_PASSWORD
-
-        echo 'Running pre-check...'
-        ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
-          task ansible:network-mounts:check
-
-        echo ''
-        echo 'Applying changes...'
         ANSIBLE_NETWORK_MOUNTS_LIMIT=plex \
           task ansible:network-mounts:manage
 
