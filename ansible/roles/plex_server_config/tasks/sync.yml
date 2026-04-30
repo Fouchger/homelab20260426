@@ -1,0 +1,71 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/sync.yml
+# Purpose:
+#   Configure optional Plex configuration sync between multiple Plex servers.
+# Notes:
+#   - Plex does not provide supported multi-server server-setting replication.
+#   - The first host in the plex inventory group is treated as primary by default.
+#   - Server-unique identity, token, cache, logs, and library databases are excluded.
+# ==============================================================================
+
+- name: Report sync mode for single-server Plex estates
+  ansible.builtin.debug:
+    msg: "Only one Plex server is in the plex group; no multi-server sync is required."
+  when: groups.get('plex', []) | length <= 1
+
+- name: Install rsync for multi-server Plex sync
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+    update_cache: true
+  when:
+    - plex_server_config_sync_enabled | bool
+    - groups.get('plex', []) | length > 1
+
+- name: Report Plex primary sync server
+  ansible.builtin.debug:
+    msg: "{{ plex_server_config_sync_primary }} is the Plex configuration sync source."
+  when:
+    - plex_server_config_sync_enabled | bool
+    - groups.get('plex', []) | length > 1
+    - inventory_hostname == plex_server_config_sync_primary
+
+- name: Install Plex configuration sync service on secondary servers
+  ansible.builtin.template:
+    src: plex-config-sync.service.j2
+    dest: /etc/systemd/system/plex-config-sync.service
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - plex_server_config_sync_enabled | bool
+    - groups.get('plex', []) | length > 1
+    - inventory_hostname != plex_server_config_sync_primary
+  notify: Reload systemd
+
+- name: Install Plex configuration sync timer on secondary servers
+  ansible.builtin.template:
+    src: plex-config-sync.timer.j2
+    dest: /etc/systemd/system/plex-config-sync.timer
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - plex_server_config_sync_enabled | bool
+    - groups.get('plex', []) | length > 1
+    - inventory_hostname != plex_server_config_sync_primary
+  notify: Reload systemd
+
+- name: Flush systemd reload before enabling Plex configuration sync timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Plex configuration sync timer on secondary servers
+  ansible.builtin.systemd_service:
+    name: plex-config-sync.timer
+    enabled: true
+    state: started
+  when:
+    - plex_server_config_sync_enabled | bool
+    - groups.get('plex', []) | length > 1
+    - inventory_hostname != plex_server_config_sync_primary

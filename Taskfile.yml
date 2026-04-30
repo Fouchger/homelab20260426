@@ -100,8 +100,10 @@ tasks:
       - task: mikrotik:ssh-copy-id
       - task: mikrotik:backup:run
       - task: mikrotik:plan:run
-      - task: task ansible:ssh-access:manage
+      - task: proxmox_scripts:plex:create
+      - task: ansible:ssh-access:manage
       - task: plex:network-mounts:manage
+      - task: plex:configure:manage
 
       - |
         # Print Header

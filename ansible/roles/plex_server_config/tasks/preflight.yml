@@ -1,0 +1,25 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/preflight.yml
+# Purpose:
+#   Validate target suitability and collect facts used by later Plex phases.
+# ==============================================================================
+
+- name: Refuse unsupported targets
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] is defined
+      - ansible_facts['system'] == 'Linux'
+    fail_msg: "plex_server_config only supports Linux Plex Media Server targets."
+
+- name: Gather Plex service facts
+  ansible.builtin.service_facts:
+
+- name: Validate Plex service exists
+  ansible.builtin.assert:
+    that:
+      - plex_server_config_service_name ~ '.service' in ansible_facts.services
+        or plex_server_config_service_name in ansible_facts.services
+    fail_msg: >-
+      Plex service {{ plex_server_config_service_name }} was not found on {{ inventory_hostname }}.
+      Install Plex first or override plex_server_config_service_name.

@@ -1,0 +1,112 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/libraries.yml
+# Purpose:
+#   Configure Plex libraries through the local Plex API.
+# Notes:
+#   - Uses plex_server_config_effective_api_token from PLEX_TOKEN or the local server token read after the Plex claim phase.
+#   - Missing media paths are ignored by default to avoid creating wrong mounts.
+# ==============================================================================
+
+- name: Skip library management when no local Plex API token is available
+  ansible.builtin.debug:
+    msg: >-
+      Skipping Plex library management on {{ inventory_hostname }} because no usable local Plex API token is available. Claim the server with PLEX_CLAIM_TOKEN or provide PLEX_TOKEN, then re-run the same task.
+  when: plex_server_config_effective_api_token | default('', true) | length == 0
+
+- name: Manage Plex libraries when token is available
+  when: plex_server_config_effective_api_token | default('', true) | length > 0
+  block:
+    - name: Check configured library media paths
+      ansible.builtin.stat:
+        path: "{{ item.1 }}"
+      loop: "{{ plex_server_config_libraries | subelements('locations') }}"
+      loop_control:
+        label: "{{ item.0.name }} -> {{ item.1 }}"
+      register: plex_server_config_library_path_stats
+
+    - name: Create missing library media paths when requested
+      ansible.builtin.file:
+        path: "{{ item.item.1 }}"
+        state: directory
+        owner: "{{ plex_server_config_user }}"
+        group: "{{ plex_server_config_group }}"
+        mode: '0755'
+      loop: "{{ plex_server_config_library_path_stats.results }}"
+      loop_control:
+        label: "{{ item.item.0.name }} -> {{ item.item.1 }}"
+      when:
+        - plex_server_config_create_missing_library_paths | bool
+        - not item.stat.exists
+
+    - name: Build available library path map
+      ansible.builtin.set_fact:
+        plex_server_config_available_library_paths: >-
+          {{ plex_server_config_available_library_paths | default({})
+             | combine({item.item.0.name: ((plex_server_config_available_library_paths | default({})).get(item.item.0.name, []) + [item.item.1])}) }}
+      loop: "{{ plex_server_config_library_path_stats.results }}"
+      loop_control:
+        label: "{{ item.item.0.name }} -> {{ item.item.1 }}"
+      when: item.stat.exists or plex_server_config_create_missing_library_paths | bool
+
+    - name: Read current Plex library sections
+      ansible.builtin.uri:
+        url: "{{ plex_server_config_api_base_url }}/library/sections?X-Plex-Token={{ plex_server_config_effective_api_token | urlencode }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: "{{ plex_server_config_api_timeout }}"
+      register: plex_server_config_sections_response
+      no_log: true
+
+    - name: Initialise existing Plex library section map
+      ansible.builtin.set_fact:
+        plex_server_config_existing_sections: {}
+
+    - name: Build existing Plex library section map
+      ansible.builtin.set_fact:
+        plex_server_config_existing_sections: "{{ plex_server_config_existing_sections | combine({item.0: item.1}) }}"
+      loop: "{{ plex_server_config_sections_response.content | regex_findall('<Directory[^>]*title=\"([^\"]+)\"[^>]*key=\"([^\"]+)\"') }}"
+      loop_control:
+        label: "{{ item.0 }}"
+
+    - name: Create missing Plex library sections
+      ansible.builtin.uri:
+        url: "{{ plex_server_config_api_base_url }}/library/sections"
+        method: POST
+        body_format: form-urlencoded
+        body: >-
+          {{ {
+            'X-Plex-Token': plex_server_config_effective_api_token,
+            'name': item.name,
+            'type': item.type,
+            'scanner': item.scanner,
+            'agent': item.agent,
+            'language': item.language,
+            'location[]': plex_server_config_available_library_paths.get(item.name, [])
+          } | combine(item.preferences | default({})) }}
+        status_code:
+          - 200
+          - 201
+        timeout: "{{ plex_server_config_api_timeout }}"
+      loop: "{{ plex_server_config_libraries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.name not in plex_server_config_existing_sections
+        - plex_server_config_available_library_paths.get(item.name, []) | length > 0
+      register: plex_server_config_library_create_result
+      no_log: true
+
+    - name: Refresh all Plex libraries after library changes
+      ansible.builtin.uri:
+        url: "{{ plex_server_config_api_base_url }}/library/sections/all/refresh?X-Plex-Token={{ plex_server_config_effective_api_token | urlencode }}"
+        method: GET
+        status_code:
+          - 200
+          - 201
+        timeout: "{{ plex_server_config_api_timeout }}"
+      when:
+        - plex_server_config_scan_libraries_after_change | bool
+        - plex_server_config_library_create_result is changed
+      no_log: true

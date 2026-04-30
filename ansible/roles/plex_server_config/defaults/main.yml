@@ -1,0 +1,165 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/defaults/main.yml
+# Purpose:
+#   Defaults for configuring Plex Media Server application settings on Linux.
+# Notes:
+#   - Server bootstrap and local configuration do not require a Plex token.
+#   - Account-level watch-state sync is a standard finalisation step and requires
+#     PLEX_TOKEN only after the server is running and locally configured.
+#   - Override values in inventory, group vars, host vars, or Ansible Vault.
+# ==============================================================================
+
+plex_server_config_enabled: true
+
+# Role phase switches. Keep these enabled for standard Plex server setup.
+plex_server_config_manage_service: true
+plex_server_config_manage_preferences: true
+plex_server_config_manage_claim: true
+plex_server_config_manage_libraries: true
+plex_server_config_manage_sync: true
+plex_server_config_manage_account_watch_state_sync: true
+
+# When true, the final account phase fails if PLEX_TOKEN is absent. The failure
+# happens only after server baseline, preferences, libraries, and sync are handled.
+plex_server_config_account_watch_state_sync_required: true
+plex_server_config_restart_on_change: true
+
+# Plex service and filesystem paths.
+plex_server_config_service_name: plexmediaserver
+plex_server_config_user: plex
+plex_server_config_group: plex
+plex_server_config_data_dir: /var/lib/plexmediaserver/Library/Application Support/Plex Media Server
+plex_server_config_preferences_file: "{{ plex_server_config_data_dir }}/Preferences.xml"
+plex_server_config_helper_path: /usr/local/sbin/update-plex-preferences.py
+
+# Local Plex API connection. This should normally stay loopback because the role
+# runs on the Plex server itself.
+plex_server_config_api_scheme: http
+plex_server_config_api_host: 127.0.0.1
+plex_server_config_api_port: 32400
+plex_server_config_api_base_url: "{{ plex_server_config_api_scheme }}://{{ plex_server_config_api_host }}:{{ plex_server_config_api_port }}"
+plex_server_config_api_timeout: 30
+plex_server_config_api_retries: 30
+plex_server_config_api_delay: 2
+plex_server_config_token: "{{ lookup('env', 'PLEX_TOKEN') | default('', true) }}"
+
+# Plex server claim. Generate a short-lived claim token at https://www.plex.tv/claim.
+plex_server_config_claim_token: "{{ lookup('env', 'PLEX_CLAIM_TOKEN') | default('', true) }}"
+plex_server_config_claim_url: "{{ plex_server_config_api_base_url }}/myplex/claim"
+plex_server_config_claim_help_url: https://www.plex.tv/claim
+plex_server_config_claim_required: true
+
+# Plex native account-level Sync My Watch State and Ratings.
+plex_server_config_watch_state_sync_endpoint: https://plex.tv/api/v2/user/view_state_sync
+plex_server_config_watch_state_sync_consent: true
+
+# Inventory-driven naming. Override plex_server_config_friendly_name per host
+# when you want display names that differ from inventory_hostname.
+plex_server_config_friendly_name: "{{ inventory_hostname }}"
+
+# Homelab defaults. These are intentionally conservative and repeatable.
+plex_server_config_preferences:
+  FriendlyName: "{{ plex_server_config_friendly_name }}"
+  AcceptedEULA: '1'
+  PublishServerOnPlexOnlineKey: '1'
+  GdmEnabled: '1'
+  EnableIPv6: '0'
+  secureConnections: preferred
+  ManualPortMappingMode: '1'
+  ManualPortMappingPort: "{{ plex_server_config_remote_access_port | default('32400') }}"
+  FSEventLibraryUpdatesEnabled: '1'
+  ScheduledLibraryUpdatesEnabled: '1'
+  ScheduledLibraryUpdateInterval: daily
+  autoEmptyTrash: '0'
+  GenerateBIFBehavior: scheduled
+  GenerateIntroMarkerBehavior: scheduled
+  GenerateCreditsMarkerBehavior: scheduled
+  GenerateChapterThumbBehavior: scheduled
+  ButlerStartHour: '2'
+  ButlerEndHour: '5'
+  DlnaEnabled: '0'
+  LogNumFiles: '10'
+  logDebug: '0'
+  LogVerbose: '0'
+
+# LANs allowed to access Plex without auth. Leave empty unless explicitly needed.
+plex_server_config_allowed_networks: "{{ lookup('env', 'PLEX_ALLOWED_NETWORKS') | default('', true) }}"
+
+plex_server_config_effective_preferences: >-
+  {{ plex_server_config_preferences
+     | combine({'allowedNetworks': plex_server_config_allowed_networks}
+       if plex_server_config_allowed_networks | length > 0 else {}, recursive=True) }}
+
+# Default libraries for the existing OMV mount layout. Missing paths are ignored
+# unless plex_server_config_create_missing_library_paths is true.
+plex_server_config_libraries:
+  - name: Movies
+    type: movie
+    scanner: Plex Movie
+    agent: tv.plex.agents.movie
+    language: en-US
+    locations:
+      - /mnt/TB5a/Movies
+      - /mnt/TB10a/Movies
+      - /mnt/TB10b/Movies
+      - /mnt/TB4a/Movies
+      - /mnt/TB16a/Movies
+    preferences:
+      useLocalAssets: '1'
+  - name: TV Shows
+    type: show
+    scanner: Plex TV Series
+    agent: tv.plex.agents.series
+    language: en-US
+    locations:
+      - /mnt/TB5a/TV
+      - /mnt/TB10a/TV
+      - /mnt/TB10b/TV
+      - /mnt/TB4a/TV
+      - /mnt/TB16a/TV
+    preferences:
+      useLocalAssets: '1'
+  - name: Music
+    type: artist
+    scanner: Plex Music
+    agent: tv.plex.agents.music
+    language: en-US
+    locations:
+      - /mnt/TB5a/Music
+      - /mnt/TB10a/Music
+      - /mnt/TB10b/Music
+      - /mnt/TB4a/Music
+      - /mnt/TB16a/Music
+    preferences: {}
+
+plex_server_config_create_missing_library_paths: false
+plex_server_config_scan_libraries_after_change: true
+
+# Plex has no supported multi-server configuration replication. This optional
+# sync only copies conservative configuration content from primary to secondary.
+plex_server_config_sync_enabled: "{{ (groups.get('plex', []) | length > 1) | bool }}"
+plex_server_config_sync_primary: "{{ groups.get('plex', [inventory_hostname]) | first }}"
+plex_server_config_sync_mode: configuration-only
+plex_server_config_sync_schedule: '*-*-* 03:30:00'
+plex_server_config_sync_user: root
+plex_server_config_sync_remote_path: "{{ plex_server_config_data_dir }}/"
+plex_server_config_sync_local_path: "{{ plex_server_config_data_dir }}/"
+plex_server_config_sync_excludes:
+  - Cache/
+  - Codecs/
+  - Diagnostics/
+  - Logs/
+  - Media/
+  - Updates/
+  - Crash Reports/
+  - Preferences.xml
+  - plexmediaserver.pid
+  - Plug-in Support/Databases/com.plexapp.plugins.library.db*
+  - Plug-in Support/Databases/com.plexapp.plugins.library.blobs.db*
+plex_server_config_sync_rsync_options:
+  - --archive
+  - --delete
+  - --numeric-ids
+  - --human-readable
+  - --one-file-system

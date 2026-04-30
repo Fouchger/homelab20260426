@@ -19,53 +19,36 @@
 set -euo pipefail
 set -o errtrace
 
-resolve_base_dir() {
-  local requested_dir="${1:-}"
+# Resolve repo root (prefer git when available)
+if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  BASE_DIR="$git_root"
+else
+  BASE_DIR="$(pwd)"
+fi
 
-  if [[ -n "${requested_dir}" ]]; then
-    cd "${requested_dir}" >/dev/null 2>&1
+echo "Working directory: $BASE_DIR"
+
+# 1) Make all *.sh files executable (recursive)
+echo "Making all *.sh files executable..."
+while IFS= read -r -d '' file; do
+  chmod +x "$file"
+  echo "  chmod +x $file"
+done < <(find "$BASE_DIR" -type f -name "*.sh" -print0)
+
+# 2) Make key Python entrypoints executable (if present)
+TARGETS=(
+  "$BASE_DIR/scripts/lib/render-ansible-inventory.py"
+
+)
+
+echo "Making target Python scripts executable (if they exist)..."
+for target in "${TARGETS[@]}"; do
+  if [[ -f "$target" ]]; then
+    chmod +x "$target"
+    echo "  chmod +x $target"
+  else
+    echo "  Skipped (not found): $target"
   fi
+done
 
-  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    printf '%s\n' "${git_root}"
-    return 0
-  fi
-
-  pwd
-}
-
-make_file_executable() {
-  local target_file="$1"
-
-  if [[ -f "${target_file}" ]]; then
-    chmod +x "${target_file}"
-    printf 'chmod +x %s\n' "${target_file}"
-  fi
-}
-
-main() {
-  local base_dir
-  base_dir="$(resolve_base_dir "${1:-}")"
-
-  printf 'Working directory: %s\n' "${base_dir}"
-
-  printf 'Ensuring all shell scripts are executable...\n'
-  while IFS= read -r -d '' file_path; do
-    make_file_executable "${file_path}"
-  done < <(find "${base_dir}" -type f -name '*.sh' -print0)
-
-  printf 'Ensuring key task and bootstrap entrypoints are executable...\n'
-  while IFS= read -r -d '' file_path; do
-    make_file_executable "${file_path}"
-  done < <(
-    find "${base_dir}" -maxdepth 2 -type f \( \
-      -name 'install.sh' -o \
-      -name 'bootstrap.sh' -o \
-      -name 'configure.sh' \
-    \) -print0
-  )
-
-  printf 'Executable permission reconciliation complete.\n'
-}
-
-main "${1:-}"
+echo "Done."

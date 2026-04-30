@@ -1,0 +1,67 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/account_watch_state_sync.yml
+# Purpose:
+#   Enable Plex native account-level watch state and ratings sync after servers
+#   are configured and running.
+# Notes:
+#   - This is an account-level Plex.tv setting, not a per-server preference.
+#   - PLEX_TOKEN must belong to the Plex account that owns the servers.
+# ==============================================================================
+
+- name: Report account watch-state sync requirement when token is missing
+  ansible.builtin.debug:
+    msg: >-
+      Plex servers have been configured locally. PLEX_TOKEN is now required to
+      complete the standard account-level Sync My Watch State and Ratings setup.
+  when: plex_server_config_token | length == 0
+  run_once: true
+
+- name: Stop after local server setup when account watch-state token is missing
+  ansible.builtin.assert:
+    that:
+      - plex_server_config_token | length > 0
+    fail_msg: >-
+      Local Plex server setup completed, but Plex native Sync My Watch State and
+      Ratings could not be enabled because PLEX_TOKEN is not set. Export PLEX_TOKEN
+      or set plex_server_config_token from Ansible Vault, then re-run the same task.
+  when: plex_server_config_account_watch_state_sync_required | bool
+  run_once: true
+
+- name: Skip account watch-state sync when token is not required and missing
+  ansible.builtin.debug:
+    msg: "PLEX_TOKEN not provided; skipping account-level watch-state sync."
+  when:
+    - plex_server_config_token | length == 0
+    - not (plex_server_config_account_watch_state_sync_required | bool)
+  run_once: true
+
+- name: Report native watch-state sync action in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Check mode: would enable Plex native Sync My Watch State and Ratings for
+      the Plex account associated with the supplied token.
+  when:
+    - plex_server_config_token | length > 0
+    - ansible_check_mode | bool
+  run_once: true
+
+- name: Enable Plex native Sync My Watch State and Ratings
+  ansible.builtin.uri:
+    url: "{{ plex_server_config_watch_state_sync_endpoint }}?consent={{ plex_server_config_watch_state_sync_consent | bool | ternary('true', 'false') }}"
+    method: PUT
+    headers:
+      Accept: application/json
+      X-Plex-Token: "{{ plex_server_config_token }}"
+    status_code:
+      - 200
+      - 201
+      - 204
+    timeout: "{{ plex_server_config_api_timeout }}"
+    return_content: true
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  when:
+    - plex_server_config_token | length > 0
+    - not (ansible_check_mode | bool)

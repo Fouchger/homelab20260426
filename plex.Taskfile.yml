@@ -45,3 +45,22 @@ tasks:
     desc: Alias for mounting OMV/CIFS network drives on Plex servers only
     cmds:
       - task: network-mounts:manage
+
+  configure:check:
+    desc: Preview Plex server setup, libraries, sync, and account watch-state finalisation
+    cmds:
+      - |
+        set -euo pipefail
+        task ansible:plex:check
+
+  configure:manage:
+    desc: Configure Plex server setup, libraries, sync, and account watch-state finalisation
+    cmds:
+      - |
+        set -euo pipefail
+        task ansible:plex:configure
+
+  configure:
+    desc: Alias for configure:manage
+    cmds:
+      - task: configure:manage

@@ -1,0 +1,24 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/meta/main.yml
+# Purpose:
+#   Role metadata for Plex Media Server configuration automation.
+# ==============================================================================
+
+galaxy_info:
+  role_name: plex_server_config
+  author: homelab
+  description: Configure Plex Media Server preferences, libraries, account watch-state sync, and conservative multi-server configuration sync.
+  license: MIT
+  min_ansible_version: '2.15'
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - bullseye
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+
+dependencies: []

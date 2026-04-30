@@ -297,3 +297,36 @@ tasks:
         SSH_KNOWN_HOSTS_FILE='{{.SSH_KNOWN_HOSTS_FILE}}' \
         ANSIBLE_NETWORK_MOUNTS_CHECK_MODE='true' \
           '{{.ROOT_DIR}}/scripts/lib/manage-network-mounts.sh'
+
+  plex:configure:
+    desc: Configure Plex Media Server setup, libraries, sync, and account watch-state finalisation
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: plex:configure
+        # Purpose:
+        #   Apply the Plex configuration Ansible role to the plex inventory group.
+        # =============================================================================
+        set -euo pipefail
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+          '{{.ANSIBLE_PLAYBOOK}}' \
+            -i '{{.ANSIBLE_INVENTORY_FILE}}' \
+            '{{.ROOT_DIR}}/ansible/playbooks/plex_configure.yml'
+
+  plex:check:
+    desc: Preview Plex Media Server setup, libraries, sync, and account watch-state finalisation
+    deps: [tools:check]
+    cmds:
+      - |
+        # =============================================================================
+        # Task: plex:check
+        # Purpose:
+        #   Preview the Plex configuration Ansible role against the plex inventory group.
+        # =============================================================================
+        set -euo pipefail
+        ANSIBLE_CONFIG='{{.ANSIBLE_CONFIG_FILE}}' \
+          '{{.ANSIBLE_PLAYBOOK}}' \
+            -i '{{.ANSIBLE_INVENTORY_FILE}}' \
+            '{{.ROOT_DIR}}/ansible/playbooks/plex_configure.yml' \
+            --check

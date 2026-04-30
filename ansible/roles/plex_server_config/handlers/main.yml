@@ -1,0 +1,16 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/handlers/main.yml
+# Purpose:
+#   Handlers for Plex Media Server configuration changes.
+# ==============================================================================
+
+- name: Restart Plex Media Server
+  ansible.builtin.systemd_service:
+    name: "{{ plex_server_config_service_name }}"
+    state: restarted
+  when: plex_server_config_restart_on_change | bool
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true

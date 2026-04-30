@@ -1,0 +1,126 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/claim.yml
+# Purpose:
+#   Claim a newly initialised Plex Media Server before API-managed libraries and
+#   account-level settings are applied.
+# Notes:
+#   - PLEX_CLAIM_TOKEN is short-lived and generated at https://www.plex.tv/claim.
+#   - PLEX_CLAIM_TOKEN is not the same as PLEX_TOKEN.
+#   - If the server is already claimed, this phase reads the local server token
+#     from Preferences.xml for later local API tasks.
+# ==============================================================================
+
+- name: Read Plex Preferences.xml for claim state
+  ansible.builtin.slurp:
+    src: "{{ plex_server_config_preferences_file }}"
+  register: plex_server_config_preferences_slurp
+  no_log: true
+
+- name: Record current Plex claim state and local API token
+  ansible.builtin.set_fact:
+    plex_server_config_preferences_content: "{{ plex_server_config_preferences_slurp.content | b64decode }}"
+    plex_server_config_server_claimed: >-
+      {{ (plex_server_config_preferences_slurp.content | b64decode)
+         | regex_search('PlexOnlineToken="[^"]+"') is not none }}
+    plex_server_config_local_server_token: >-
+      {{ ((plex_server_config_preferences_slurp.content | b64decode)
+          | regex_search('PlexOnlineToken="([^"]+)"', '\\1')
+          | default([''], true)) | first }}
+  no_log: true
+
+- name: Use supplied Plex token for local API when provided
+  ansible.builtin.set_fact:
+    plex_server_config_effective_api_token: "{{ plex_server_config_token }}"
+  when: plex_server_config_token | length > 0
+  no_log: true
+
+- name: Use existing local Plex server token for local API when available
+  ansible.builtin.set_fact:
+    plex_server_config_effective_api_token: "{{ plex_server_config_local_server_token }}"
+  when:
+    - plex_server_config_token | length == 0
+    - plex_server_config_local_server_token | length > 0
+  no_log: true
+
+- name: Report Plex claim requirement when server is unclaimed
+  ansible.builtin.debug:
+    msg: >-
+      Plex is running locally, but this server is not claimed yet. Generate a
+      short-lived claim token at {{ plex_server_config_claim_help_url }}, then run
+      PLEX_CLAIM_TOKEN='claim-...' task plex:configure:manage. This is required
+      before API-managed libraries and account-level setup can complete.
+  when:
+    - not (plex_server_config_server_claimed | bool)
+    - plex_server_config_claim_token | length == 0
+
+- name: Stop when Plex server is unclaimed and no claim token is available
+  ansible.builtin.assert:
+    that:
+      - plex_server_config_claim_token | length > 0
+    fail_msg: >-
+      Local Plex service setup completed, but the server is not claimed. Generate
+      a short-lived Plex claim token at {{ plex_server_config_claim_help_url }}
+      and re-run with PLEX_CLAIM_TOKEN='claim-...'. The claim token is separate
+      from PLEX_TOKEN and normally expires after a few minutes.
+  when:
+    - plex_server_config_claim_required | bool
+    - not (plex_server_config_server_claimed | bool)
+
+- name: Report Plex claim action in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Check mode: would claim {{ inventory_hostname }} using the supplied
+      PLEX_CLAIM_TOKEN, then read the generated local Plex server token for
+      library configuration.
+  when:
+    - not (plex_server_config_server_claimed | bool)
+    - plex_server_config_claim_token | length > 0
+    - ansible_check_mode | bool
+
+- name: Claim Plex Media Server
+  ansible.builtin.uri:
+    url: "{{ plex_server_config_claim_url }}?token={{ plex_server_config_claim_token | urlencode }}"
+    method: GET
+    status_code:
+      - 200
+      - 201
+    timeout: "{{ plex_server_config_api_timeout }}"
+    return_content: true
+  register: plex_server_config_claim_response
+  no_log: true
+  when:
+    - not (plex_server_config_server_claimed | bool)
+    - plex_server_config_claim_token | length > 0
+    - not (ansible_check_mode | bool)
+
+- name: Re-read Plex Preferences.xml after claim
+  ansible.builtin.slurp:
+    src: "{{ plex_server_config_preferences_file }}"
+  register: plex_server_config_preferences_after_claim_slurp
+  no_log: true
+  when: plex_server_config_claim_response is changed
+
+- name: Record local Plex server token after claim
+  ansible.builtin.set_fact:
+    plex_server_config_server_claimed: true
+    plex_server_config_local_server_token: >-
+      {{ ((plex_server_config_preferences_after_claim_slurp.content | b64decode)
+          | regex_search('PlexOnlineToken="([^"]+)"', '\\1')
+          | default([''], true)) | first }}
+  no_log: true
+  when: plex_server_config_claim_response is changed
+
+- name: Use newly claimed local Plex server token for local API when no Plex token was supplied
+  ansible.builtin.set_fact:
+    plex_server_config_effective_api_token: "{{ plex_server_config_local_server_token }}"
+  when:
+    - plex_server_config_token | length == 0
+    - plex_server_config_local_server_token | length > 0
+  no_log: true
+
+- name: Initialise empty local API token fact when no token is available
+  ansible.builtin.set_fact:
+    plex_server_config_effective_api_token: ""
+  when: plex_server_config_effective_api_token is not defined
+  no_log: true

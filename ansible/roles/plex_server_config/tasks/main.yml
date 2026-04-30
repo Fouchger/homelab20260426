@@ -1,0 +1,44 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/main.yml
+# Purpose:
+#   Orchestrate Plex Media Server configuration in safe, repeatable phases.
+# Notes:
+#   - Local server configuration runs before any Plex.tv account-level action.
+#   - Watch-state sync is a standard final phase, but cannot run until a token is
+#     provided after the server exists and is reachable.
+# ==============================================================================
+
+- name: Include Plex preflight tasks
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Stop when Plex configuration is disabled
+  ansible.builtin.meta: end_host
+  when: not (plex_server_config_enabled | bool)
+
+- name: Include Plex service baseline tasks
+  ansible.builtin.include_tasks: service.yml
+  when: plex_server_config_manage_service | bool
+
+- name: Include Plex preference management tasks
+  ansible.builtin.include_tasks: preferences.yml
+  when: plex_server_config_manage_preferences | bool
+
+- name: Apply pending Plex handlers before API phases
+  ansible.builtin.meta: flush_handlers
+
+- name: Include Plex server claim tasks
+  ansible.builtin.include_tasks: claim.yml
+  when: plex_server_config_manage_claim | bool
+
+- name: Include Plex library management tasks
+  ansible.builtin.include_tasks: libraries.yml
+  when: plex_server_config_manage_libraries | bool
+
+- name: Include Plex multi-server configuration sync tasks
+  ansible.builtin.include_tasks: sync.yml
+  when: plex_server_config_manage_sync | bool
+
+- name: Include Plex account watch-state sync tasks
+  ansible.builtin.include_tasks: account_watch_state_sync.yml
+  when: plex_server_config_manage_account_watch_state_sync | bool

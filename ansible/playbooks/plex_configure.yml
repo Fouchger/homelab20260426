@@ -1,0 +1,18 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/plex_configure.yml
+# Purpose:
+#   Configure Plex Media Server application settings for Plex inventory hosts.
+# Notes:
+#   - Targets the generated inventory group named plex.
+#   - Supply PLEX_TOKEN to enable library creation and the final account-level watch-state sync action.
+# ==============================================================================
+
+- name: Configure Plex Media Server
+  hosts: "{{ lookup('env', 'ANSIBLE_PLEX_LIMIT') | default('plex', true) }}"
+  gather_facts: true
+  become: true
+  serial: "{{ lookup('env', 'ANSIBLE_PLEX_SERIAL') | default('1', true) }}"
+
+  roles:
+    - role: plex_server_config

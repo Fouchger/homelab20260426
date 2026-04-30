@@ -1,0 +1,35 @@
+---
+# ==============================================================================
+# File: ansible/roles/plex_server_config/tasks/preferences.yml
+# Purpose:
+#   Manage Plex Media Server Preferences.xml values.
+# ==============================================================================
+
+- name: Install Plex preference updater helper
+  ansible.builtin.copy:
+    src: update-plex-preferences.py
+    dest: "{{ plex_server_config_helper_path }}"
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Apply Plex server preferences
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - "{{ plex_server_config_helper_path }}"
+      - --file
+      - "{{ plex_server_config_preferences_file }}"
+      - --json
+      - "{{ plex_server_config_effective_preferences | to_json }}"
+      - --backup
+  register: plex_server_config_preferences_update
+  changed_when: "'changed=true' in plex_server_config_preferences_update.stdout"
+  notify: Restart Plex Media Server
+
+- name: Ensure Plex owns Preferences.xml
+  ansible.builtin.file:
+    path: "{{ plex_server_config_preferences_file }}"
+    owner: "{{ plex_server_config_user }}"
+    group: "{{ plex_server_config_group }}"
+    mode: '0644'
